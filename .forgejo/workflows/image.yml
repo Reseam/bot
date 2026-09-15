@@ -1,0 +1,27 @@
+name: image
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  image:
+    runs-on: docker
+    container:
+      image: gcr.io/kaniko-project/executor:debug
+    steps:
+      - name: Build and push
+        env:
+          GIT_USERNAME: ${{ github.actor }}
+          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          auth=$(printf '%s:%s' "$REGISTRY_USER" "$REGISTRY_TOKEN" | base64 -w0)
+          printf '{"auths":{"git.reseam.app":{"auth":"%s"}}}' "$auth" > /kaniko/.docker/config.json
+          /kaniko/executor \
+            --context "git://git.reseam.app/reseam/bot.git#refs/heads/main#${{ github.sha }}" \
+            --destination git.reseam.app/reseam/bot:latest \
+            --destination git.reseam.app/reseam/bot:${{ github.sha }} \
+            --cache=true \
+            --cache-repo git.reseam.app/reseam/bot-cache
