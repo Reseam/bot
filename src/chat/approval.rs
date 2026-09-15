@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use poise::serenity_prelude as serenity;
 use tracing::warn;
@@ -17,14 +17,14 @@ const APPROVE_RUN: &str = "approval:run";
 const DENY: &str = "approval:deny";
 
 impl Run {
-    pub async fn approve(&self, tool: &str, action: &str) -> Result<bool> {
+    pub async fn approve(&self, tool: &str, action: &str) -> Result<()> {
         if self
             .grants
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains(tool)
         {
-            return Ok(true);
+            return Ok(());
         }
 
         let buttons = vec![serenity::CreateActionRow::Buttons(vec![
@@ -106,11 +106,12 @@ impl Run {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(tool.to_owned());
         }
-        pending.finish(decision.label(tool)).await?;
-        Ok(matches!(
-            decision,
-            Decision::Approved | Decision::ApprovedForRun
-        ))
+        let outcome = decision.label(tool);
+        pending.finish(outcome.clone()).await?;
+        match decision {
+            Decision::Approved | Decision::ApprovedForRun => Ok(()),
+            _ => bail!(outcome),
+        }
     }
 }
 
@@ -128,7 +129,7 @@ impl Decision {
         match self {
             Self::Approved => "Approved".to_owned(),
             Self::ApprovedForRun => format!("Approved {tool} for this run"),
-            Self::Denied => "Denied".to_owned(),
+            Self::Denied => "Denied by the invoker".to_owned(),
             Self::TimedOut => "Timed out".to_owned(),
             Self::Cancelled => "Cancelled".to_owned(),
         }

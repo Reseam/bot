@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -10,7 +11,7 @@ use serde_json::{Map, Value};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+    Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
         .expect("the constant interpolation pattern is valid")
 });
 
@@ -23,6 +24,42 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default)]
     pub agent: AgentConfig,
+    #[serde(default)]
+    pub forges: BTreeMap<String, ForgeConfig>,
+    #[serde(default)]
+    pub shell: ShellConfig,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeKind {
+    GitHub,
+    Forgejo,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForgeConfig {
+    pub kind: ForgeKind,
+    pub url: String,
+    pub token: String,
+    pub default_repo: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShellConfig {
+    pub enabled: bool,
+    pub timeout_secs: u64,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_secs: 120,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -94,9 +131,13 @@ impl Config {
             .parse::<toml::Table>()
             .with_context(|| format!("failed to parse configuration from {}", path.display()))?;
         interpolate_table(&mut table, &|name| env::var(name), "")?;
-        table
+        let config: Self = table
             .try_into()
-            .with_context(|| format!("invalid configuration in {}", path.display()))
+            .with_context(|| format!("invalid configuration in {}", path.display()))?;
+        if !(1..=600).contains(&config.shell.timeout_secs) {
+            bail!("shell.timeout_secs must be between 1 and 600")
+        }
+        Ok(config)
     }
 }
 
@@ -128,11 +169,19 @@ fn interpolate_value(
             for captures in PATTERN.captures_iter(text) {
                 let whole = captures.get_match();
                 let name = &captures[1];
-                let replacement = match lookup(name) {
-                    Ok(replacement) => replacement,
-                    Err(_) => bail!(
-                        "environment variable {name} referenced by config key {path} is not set"
-                    ),
+                let replacement = match (lookup(name), captures.get(2)) {
+                    (Ok(replacement), Some(default)) if replacement.is_empty() => {
+                        default.as_str().to_owned()
+                    }
+                    (Ok(replacement), _) => replacement,
+                    (Err(_), default) => default.map_or_else(
+                        || {
+                            Err(anyhow::anyhow!(
+                                "environment variable {name} referenced by config key {path} is not set"
+                            ))
+                        },
+                        |value| Ok(value.as_str().to_owned()),
+                    )?,
                 };
                 output.push_str(&text[end..whole.start()]);
                 output.push_str(&replacement);
@@ -193,5 +242,18 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("MISSING_KEY"));
         assert!(message.contains("llm.api_key"));
+    }
+
+    #[test]
+    fn interpolation_uses_defaults_only_for_missing_variables() -> Result<()> {
+        let table = interpolate(
+            "present = '${PRESENT:-fallback}'\nmissing = '${MISSING:-fallback}'\nempty = '${EMPTY:-fallback}'\nempty_default = '${UNSET:-}'",
+            &[("PRESENT", "value"), ("EMPTY", "")],
+        )?;
+        assert_eq!(table["present"].as_str(), Some("value"));
+        assert_eq!(table["missing"].as_str(), Some("fallback"));
+        assert_eq!(table["empty"].as_str(), Some("fallback"));
+        assert_eq!(table["empty_default"].as_str(), Some(""));
+        Ok(())
     }
 }

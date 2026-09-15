@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod conversations;
 mod db;
+mod forge;
 mod llm;
 #[cfg(test)]
 mod test_support;
@@ -22,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 use crate::chat::Runs;
 use crate::config::Config;
 use crate::llm::Llm;
+use crate::tools::repo::RepoLocks;
 
 pub type Error = anyhow::Error;
 pub type Data = Arc<App>;
@@ -32,6 +34,8 @@ pub struct App {
     pub llm: Llm,
     pub http: reqwest::Client,
     pub runs: Runs,
+    pub forges: std::collections::BTreeMap<String, forge::Forge>,
+    pub repo_locks: RepoLocks,
 }
 
 #[tokio::main]
@@ -52,6 +56,11 @@ async fn main() -> Result<()> {
     let token = config.discord.token.clone();
     let guild_id = config.discord.guild_id;
     let llm = Llm::new(config.llm.clone())?;
+    let forges = config
+        .forges
+        .iter()
+        .map(|(name, config)| Ok((name.clone(), forge::Forge::new(config)?)))
+        .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(120))
@@ -63,6 +72,8 @@ async fn main() -> Result<()> {
         llm,
         http,
         runs: Runs::default(),
+        forges,
+        repo_locks: RepoLocks::default(),
     });
     info!(data_dir = %app.config.data_dir.display(), "configuration loaded");
 

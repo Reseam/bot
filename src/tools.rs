@@ -12,6 +12,9 @@ use crate::chat::Run;
 use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 
 pub(crate) mod discord;
+mod forge;
+pub(crate) mod repo;
+mod shell;
 
 #[derive(Clone, Copy, JsonSchema, Deserialize)]
 #[serde(try_from = "String")]
@@ -173,7 +176,13 @@ impl ToolSet {
 }
 
 pub fn for_run(run: &Arc<Run>) -> ToolSet {
-    ToolSet::new(discord::tools(run))
+    let mut tools = discord::tools(run);
+    tools.extend(forge::tools(run));
+    tools.extend(repo::tools(run));
+    if run.app.config.shell.enabled {
+        tools.extend(shell::tools(run));
+    }
+    ToolSet::new(tools)
 }
 
 #[cfg(test)]

@@ -19,3 +19,18 @@ vision = true
 [agent]
 max_turns = 40
 history_messages = 30
+
+[forges.forgejo]
+kind = "forgejo"
+url = "${FORGEJO_URL}"
+token = "${FORGEJO_TOKEN:-}"
+default_repo = "reseam/reseam"
+
+[forges.github]
+kind = "github"
+url = "https://api.github.com"
+token = "${GITHUB_TOKEN:-}"
+
+[shell]
+enabled = true
+timeout_secs = 120
