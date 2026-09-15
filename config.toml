@@ -1,0 +1,20 @@
+data_dir = "${DATA_DIR}"
+
+[discord]
+token = "${DISCORD_TOKEN}"
+guild_id = "${DISCORD_GUILD_ID}"
+
+[access]
+owner_ids = ["${DISCORD_OWNER_ID}"]
+team_role_ids = ["${DISCORD_TEAM_ROLE_ID}"]
+
+[llm]
+base_url = "${LLM_BASE_URL}"
+api_key = "${LLM_API_KEY}"
+model = "${LLM_MODEL}"
+context_window = 128000
+max_output_tokens = 16000
+
+[agent]
+max_turns = 40
+history_messages = 30

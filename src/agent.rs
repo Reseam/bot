@@ -1,0 +1,225 @@
+use anyhow::Result;
+use futures::future::join_all;
+use serde_json::Value;
+use tokio::sync::mpsc;
+
+use crate::llm::{
+    Completion, ContentPart, Delta, FinishReason, ImageUrl, Llm, Message, ToolCall, Usage,
+    UserContent,
+};
+use crate::tools::{ImageData, ToolContext, ToolOutput, ToolSet, truncate_output};
+
+pub enum AgentEvent {
+    Text(String),
+    ToolStarted {
+        id: String,
+        name: String,
+    },
+    ToolFinished {
+        id: String,
+        name: String,
+        is_error: bool,
+    },
+    Usage(Usage),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum Outcome {
+    Finished,
+    Cancelled,
+    TurnLimit,
+}
+
+pub struct Agent<'a> {
+    pub llm: &'a Llm,
+    pub tools: &'a ToolSet,
+    pub system: &'a str,
+    pub max_turns: u32,
+}
+
+impl Agent<'_> {
+    pub async fn run(
+        &self,
+        ctx: &ToolContext,
+        transcript: &mut Vec<Message>,
+        steering: &mut mpsc::UnboundedReceiver<Message>,
+        events: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<Outcome> {
+        let specs = self.tools.specs();
+        for _ in 0..self.max_turns {
+            drain_steering(steering, transcript);
+            if ctx.cancel.is_cancelled() {
+                return Ok(Outcome::Cancelled);
+            }
+
+            let completion = self
+                .llm
+                .complete(self.system, transcript, &specs, &ctx.cancel, |delta| {
+                    if let Delta::Text(text) = delta {
+                        let _ = events.send(AgentEvent::Text(text));
+                    }
+                })
+                .await;
+            let Completion {
+                message,
+                finish_reason,
+                usage,
+            } = match completion {
+                Ok(completion) => completion,
+                Err(_) if ctx.cancel.is_cancelled() => return Ok(Outcome::Cancelled),
+                Err(error) => return Err(error),
+            };
+            if let Some(usage) = usage {
+                let _ = events.send(AgentEvent::Usage(usage));
+            }
+            let tool_calls = message.tool_calls.clone();
+            transcript.push(Message::Assistant(message));
+
+            if tool_calls.is_empty() {
+                if drain_steering(steering, transcript) == 0 {
+                    return Ok(Outcome::Finished);
+                }
+                continue;
+            }
+
+            let results = if finish_reason == FinishReason::Length {
+                error_results(
+                    &tool_calls,
+                    "tool call was cut off by the output token limit; re-issue it with complete arguments",
+                )
+            } else {
+                match execute_tools(self.tools, ctx, &tool_calls, events).await {
+                    Some(results) => results,
+                    None => {
+                        append_results(
+                            transcript,
+                            error_results(&tool_calls, "cancelled by the user"),
+                        );
+                        return Ok(Outcome::Cancelled);
+                    }
+                }
+            };
+            append_results(transcript, results);
+        }
+        Ok(Outcome::TurnLimit)
+    }
+}
+
+struct ExecutedTool {
+    call: ToolCall,
+    result: Result<ToolOutput, String>,
+}
+
+fn error_results(calls: &[ToolCall], error: &str) -> Vec<ExecutedTool> {
+    calls
+        .iter()
+        .map(|call| ExecutedTool {
+            call: call.clone(),
+            result: Err(error.to_owned()),
+        })
+        .collect()
+}
+
+async fn execute_tools(
+    tools: &ToolSet,
+    ctx: &ToolContext,
+    calls: &[ToolCall],
+    events: &mpsc::UnboundedSender<AgentEvent>,
+) -> Option<Vec<ExecutedTool>> {
+    let futures = calls.iter().map(|call| {
+        let context = ctx.clone();
+        async move {
+            let name = call.function.name.clone();
+            let _ = events.send(AgentEvent::ToolStarted {
+                id: call.id.clone(),
+                name: name.clone(),
+            });
+            let result = execute_tool(tools, context, call).await;
+            let _ = events.send(AgentEvent::ToolFinished {
+                id: call.id.clone(),
+                name,
+                is_error: result.is_err(),
+            });
+            ExecutedTool {
+                call: call.clone(),
+                result,
+            }
+        }
+    });
+    tokio::select! {
+        () = ctx.cancel.cancelled() => None,
+        results = join_all(futures) => Some(results),
+    }
+}
+
+async fn execute_tool(
+    tools: &ToolSet,
+    ctx: ToolContext,
+    call: &ToolCall,
+) -> Result<ToolOutput, String> {
+    let Some(tool) = tools.get(&call.function.name) else {
+        return Err(format!("unknown tool `{}`", call.function.name));
+    };
+    let arguments: Value = serde_json::from_str(&call.function.arguments)
+        .map_err(|error| format!("invalid JSON arguments: {error}"))?;
+    tool.execute(ctx, arguments)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+fn append_results(transcript: &mut Vec<Message>, results: Vec<ExecutedTool>) {
+    let mut images = Vec::new();
+    let mut image_sources = Vec::new();
+    for result in results {
+        let content = match result.result {
+            Ok(output) => {
+                if !output.images.is_empty() {
+                    image_sources.push(format!(
+                        "{} ({})",
+                        result.call.function.name, result.call.id
+                    ));
+                }
+                images.extend(output.images);
+                truncate_output(&output.text)
+            }
+            Err(error) => truncate_output(&format!("Error: {error}")),
+        };
+        transcript.push(Message::Tool {
+            tool_call_id: result.call.id,
+            content,
+        });
+    }
+    if !images.is_empty() {
+        transcript.push(image_message(images, image_sources));
+    }
+}
+
+fn image_message(images: Vec<ImageData>, sources: Vec<String>) -> Message {
+    let mut content = Vec::with_capacity(images.len() + 1);
+    content.push(ContentPart::Text {
+        text: format!("Images returned by {}:", sources.join(", ")),
+    });
+    content.extend(images.into_iter().map(|image| ContentPart::ImageUrl {
+        image_url: ImageUrl {
+            url: image.data_url(),
+        },
+    }));
+    Message::User {
+        content: UserContent::from_parts(content),
+    }
+}
+
+fn drain_steering(
+    steering: &mut mpsc::UnboundedReceiver<Message>,
+    transcript: &mut Vec<Message>,
+) -> usize {
+    let mut count = 0;
+    while let Ok(message) = steering.try_recv() {
+        transcript.push(message);
+        count += 1;
+    }
+    count
+}
+
+#[cfg(test)]
+mod tests;
