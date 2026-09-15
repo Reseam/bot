@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use poise::serenity_prelude as serenity;
 use tokio::sync::OwnedMutexGuard;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::{NewRun, RunRequest, context, run, start_new};
 use crate::access::has_ai_access;
@@ -28,7 +28,7 @@ pub async fn handle_message(
     let referenced = message.referenced_message.as_deref();
     let active = referenced.and_then(|referenced| app.runs.get(referenced.id));
     let is_bot_reply = referenced.is_some_and(|referenced| referenced.author.id == bot_id);
-    if !message.mentions_user_id(bot_id) && !is_bot_reply && active.is_none() {
+    if !mentions_bot(discord, message, guild_id, bot_id) && !is_bot_reply && active.is_none() {
         return Ok(());
     }
     let roles = message
@@ -170,6 +170,22 @@ fn reaction(emoji: &str) -> serenity::ReactionType {
     serenity::ReactionType::Unicode(emoji.to_owned())
 }
 
+fn mentions_bot(
+    discord: &serenity::Context,
+    message: &serenity::Message,
+    guild_id: serenity::GuildId,
+    bot_id: serenity::UserId,
+) -> bool {
+    message.mentions_user_id(bot_id)
+        || discord.cache.guild(guild_id).is_some_and(|guild| {
+            message
+                .mention_roles
+                .iter()
+                .filter_map(|role_id| guild.roles.get(role_id))
+                .any(|role| role.tags.bot_id == Some(bot_id))
+        })
+}
+
 pub async fn handle_component(
     app: &Arc<App>,
     discord: &serenity::Context,
@@ -181,24 +197,36 @@ pub async fn handle_component(
     let Some(member) = interaction.member.as_ref() else {
         return Ok(());
     };
-    if !has_ai_access(&app.config, interaction.user.id, &member.roles) {
-        interaction
-            .create_response(
-                discord,
-                serenity::CreateInteractionResponse::Message(
-                    serenity::CreateInteractionResponseMessage::new()
-                        .content("You need AI access to use this.")
-                        .ephemeral(true),
-                ),
-            )
-            .await
-            .context("failed to reject stop interaction")?;
-        return Ok(());
-    }
     let Ok(id) = raw_id.parse::<u64>() else {
         return Ok(());
     };
     if let Some(run) = app.runs.get(serenity::MessageId::new(id)) {
+        let user_id = interaction.user.id;
+        let allowed = run.invoker.user.id == user_id
+            || app.config.access.owner_ids.contains(&user_id)
+            || member
+                .permissions
+                .is_some_and(|permissions| permissions.manage_messages());
+        if !allowed {
+            interaction
+                .create_response(
+                    discord,
+                    serenity::CreateInteractionResponse::Message(
+                        serenity::CreateInteractionResponseMessage::new()
+                            .content("Only the person who started this run can stop it.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await
+                .context("failed to reject stop interaction")?;
+            return Ok(());
+        }
+        info!(
+            conversation_id = run.conversation_id,
+            user = %interaction.user.name,
+            %user_id,
+            "run stopped"
+        );
         run.cancel.cancel();
     }
     interaction

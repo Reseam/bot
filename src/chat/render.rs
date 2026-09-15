@@ -10,6 +10,7 @@ const ANSWER_LIMIT: usize = 1_800;
 const EDIT_INTERVAL: Duration = Duration::from_millis(1_500);
 const FOOTER_LIMIT: usize = DISCORD_MESSAGE_LIMIT - ANSWER_LIMIT;
 
+#[derive(Debug)]
 pub enum FinalState {
     Outcome(Outcome),
     Error(String),

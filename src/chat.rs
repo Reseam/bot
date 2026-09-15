@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use parking_lot::Mutex;
 use poise::serenity_prelude as serenity;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::App;
 use crate::agent::{Agent, AgentEvent, CompactionSettings};
@@ -152,6 +152,14 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
     });
     app.runs.start(&run);
     app.runs.register_message(reply_to, &run);
+    let started = Instant::now();
+    info!(
+        conversation_id,
+        %channel_id,
+        invoker = %run.invoker.user.name,
+        invoker_id = %run.invoker.user.id,
+        "run started"
+    );
     for id in renderer.message_ids() {
         app.runs.register_message(id, &run);
     }
@@ -206,6 +214,12 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
     while let Ok(event) = event_rx.try_recv() {
         renderer.apply(event);
     }
+    info!(
+        conversation_id,
+        elapsed_secs = started.elapsed().as_secs(),
+        state = ?final_state,
+        "run finished"
+    );
     match renderer.finish(&discord, final_state).await {
         Ok(ids) => ids
             .into_iter()
