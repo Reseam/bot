@@ -6,6 +6,7 @@ use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::config::LlmConfig;
 
@@ -114,6 +115,7 @@ pub struct FunctionSpec {
 pub enum Delta {
     Text(String),
     Reasoning(String),
+    Restart,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -184,8 +186,23 @@ impl Llm {
             extra_body: &self.config.extra_body,
         };
 
-        let response = self.send_with_retries(&body, cancel).await?;
-        parse_stream(response, cancel, &mut on_delta).await
+        let mut attempt = 0;
+        loop {
+            let response = self.send_with_retries(&body, cancel).await?;
+            match parse_stream(response, cancel, &mut on_delta).await {
+                Err(error) if !cancel.is_cancelled() && attempt < MAX_RETRIES => {
+                    warn!(error = %format!("{error:#}"), attempt, "LLM stream failed, retrying");
+                    on_delta(Delta::Restart);
+                    let delay = Duration::from_secs(1 << attempt);
+                    attempt += 1;
+                    tokio::select! {
+                        () = cancel.cancelled() => bail!("LLM request cancelled"),
+                        () = tokio::time::sleep(delay) => {}
+                    }
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn send_with_retries(

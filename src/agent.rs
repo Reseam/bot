@@ -24,6 +24,7 @@ pub struct CompactionSettings {
 
 pub enum AgentEvent {
     TurnStarted,
+    TurnRestarted,
     Text(String),
     ToolStarted { id: String },
     ToolFinished { id: String, is_error: bool },
@@ -80,9 +81,12 @@ impl Agent<'_> {
             let completion = self
                 .llm
                 .complete(self.system, transcript, &specs, cancel, |delta| {
-                    if let Delta::Text(text) = delta {
-                        let _ = events.send(AgentEvent::Text(text));
-                    }
+                    let event = match delta {
+                        Delta::Text(text) => AgentEvent::Text(text),
+                        Delta::Restart => AgentEvent::TurnRestarted,
+                        Delta::Reasoning(_) => return,
+                    };
+                    let _ = events.send(event);
                 })
                 .await;
             let Completion {

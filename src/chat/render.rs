@@ -24,6 +24,7 @@ pub struct Renderer {
     rendered: Vec<String>,
     last_edit: Instant,
     separate_next_text: bool,
+    turn_start: usize,
     compacted: bool,
 }
 
@@ -59,6 +60,7 @@ impl Renderer {
             rendered: vec!["-# Thinking…".to_owned()],
             last_edit: Instant::now(),
             separate_next_text: false,
+            turn_start: 0,
             compacted: false,
         })
     }
@@ -69,7 +71,11 @@ impl Renderer {
 
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::TurnStarted => self.separate_next_text = !self.answer.is_empty(),
+            AgentEvent::TurnStarted => {
+                self.separate_next_text = !self.answer.is_empty();
+                self.turn_start = self.answer.len();
+            }
+            AgentEvent::TurnRestarted => self.answer.truncate(self.turn_start),
             AgentEvent::Text(text) => {
                 self.compacted = false;
                 if self.separate_next_text {
@@ -78,6 +84,7 @@ impl Renderer {
                         self.answer.push_str("\n\n");
                     }
                     self.separate_next_text = false;
+                    self.turn_start = self.answer.len();
                 }
                 self.answer.push_str(&text);
             }
@@ -146,6 +153,15 @@ impl Renderer {
             chunks[final_index].push_str(&footer);
         }
 
+        while self.messages.len() > chunks.len() {
+            self.rendered.pop();
+            if let Some(message) = self.messages.pop() {
+                message
+                    .delete(discord)
+                    .await
+                    .context("failed to delete surplus run reply")?;
+            }
+        }
         let mut added = Vec::new();
         while self.messages.len() < chunks.len() {
             if let Some(message) = self.messages.last_mut() {
@@ -218,3 +234,6 @@ fn stop_components(message_id: serenity::MessageId) -> Vec<serenity::CreateActio
 fn short_error(error: &str) -> String {
     truncate_chars(error.lines().next().unwrap_or("run failed"), 160)
 }
+
+#[cfg(test)]
+mod tests;

@@ -207,56 +207,6 @@ async fn echoes_reasoning_in_the_field_received() -> Result<()> {
 }
 
 #[tokio::test]
-async fn error_chunk_fails_completion() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(stream_response(&[json!({
-            "choices":[], "error":{"message":"provider exploded","type":"server_error"}
-        })]))
-        .mount(&server)
-        .await;
-    let llm = Llm::new(llm_config(server.uri())).expect("test client should build");
-
-    let error = llm
-        .complete(
-            "system",
-            &[user("hi")],
-            &[],
-            &CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .expect_err("error chunk should fail");
-
-    assert!(error.to_string().contains("provider exploded"));
-}
-
-#[tokio::test]
-async fn stream_without_finish_reason_fails() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(stream_response(&[json!({
-            "choices":[{"delta":{"content":"partial"},"finish_reason":null}]
-        })]))
-        .mount(&server)
-        .await;
-    let llm = Llm::new(llm_config(server.uri())).expect("test client should build");
-
-    let error = llm
-        .complete(
-            "system",
-            &[user("hi")],
-            &[],
-            &CancellationToken::new(),
-            |_| {},
-        )
-        .await
-        .expect_err("an interrupted stream should fail");
-
-    assert!(error.to_string().contains("without a finish reason"));
-}
-
-#[tokio::test]
 async fn accepts_missing_delta_and_partial_usage() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -289,14 +239,15 @@ async fn accepts_missing_delta_and_partial_usage() -> Result<()> {
     Ok(())
 }
 
-struct RetryOnce {
+struct FailOnce {
     requests: Arc<AtomicUsize>,
+    failure: ResponseTemplate,
 }
 
-impl Respond for RetryOnce {
+impl Respond for FailOnce {
     fn respond(&self, _request: &Request) -> ResponseTemplate {
         if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
-            ResponseTemplate::new(429).insert_header("Retry-After", "0")
+            self.failure.clone()
         } else {
             stream_response(&[json!({
                 "choices":[{"delta":{"content":"recovered"},"finish_reason":"stop"}]
@@ -305,17 +256,20 @@ impl Respond for RetryOnce {
     }
 }
 
-#[tokio::test]
-async fn retries_429_before_streaming() -> Result<()> {
+async fn complete_after_failure(
+    failure: ResponseTemplate,
+) -> Result<(usize, Vec<Delta>, Completion)> {
     let server = MockServer::start().await;
     let requests = Arc::new(AtomicUsize::new(0));
     Mock::given(method("POST"))
-        .respond_with(RetryOnce {
+        .respond_with(FailOnce {
             requests: Arc::clone(&requests),
+            failure,
         })
         .mount(&server)
         .await;
     let llm = Llm::new(llm_config(server.uri()))?;
+    let mut deltas = Vec::new();
 
     let completion = llm
         .complete(
@@ -323,11 +277,42 @@ async fn retries_429_before_streaming() -> Result<()> {
             &[user("hi")],
             &[],
             &CancellationToken::new(),
-            |_| {},
+            |delta| deltas.push(delta),
         )
         .await?;
 
-    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    Ok((requests.load(Ordering::SeqCst), deltas, completion))
+}
+
+#[tokio::test]
+async fn retries_429_before_streaming() -> Result<()> {
+    let (requests, deltas, completion) =
+        complete_after_failure(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .await?;
+
+    assert_eq!(requests, 2);
+    assert_eq!(deltas, vec![Delta::Text("recovered".to_owned())]);
+    assert_eq!(completion.message.content.as_deref(), Some("recovered"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn retries_a_stream_that_fails_midway_and_voids_its_output() -> Result<()> {
+    let (requests, deltas, completion) = complete_after_failure(stream_response(&[
+        json!({"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}),
+        json!({"choices":[], "error":{"message":"provider exploded","type":"server_error"}}),
+    ]))
+    .await?;
+
+    assert_eq!(requests, 2);
+    assert_eq!(
+        deltas,
+        vec![
+            Delta::Text("partial".to_owned()),
+            Delta::Restart,
+            Delta::Text("recovered".to_owned())
+        ]
+    );
     assert_eq!(completion.message.content.as_deref(), Some("recovered"));
     Ok(())
 }
