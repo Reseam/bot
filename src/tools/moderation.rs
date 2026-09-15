@@ -15,45 +15,45 @@ const MAX_BAN_DURATION: std::time::Duration = std::time::Duration::from_secs(365
 
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
     vec![
-        Tool::new::<Warn, _, _, _>(
+        Tool::new(
             "moderation_warn",
-            "Warn a server member after invoker approval.",
+            "Warn a server member when their conduct needs a recorded warning. This requires invoker approval.",
             run.clone(),
             warn,
         ),
-        Tool::new::<Timeout, _, _, _>(
+        Tool::new(
             "moderation_timeout",
-            "Timeout a server member for up to 28 days after invoker approval.",
+            "Timeout a server member for up to 28 days when they need temporary restriction. This requires invoker approval.",
             run.clone(),
             timeout,
         ),
-        Tool::new::<MemberAction, _, _, _>(
+        Tool::new(
             "moderation_kick",
-            "Kick a server member after invoker approval.",
+            "Kick a server member when they must be removed without a ban. This requires invoker approval.",
             run.clone(),
             kick,
         ),
-        Tool::new::<Ban, _, _, _>(
+        Tool::new(
             "moderation_ban",
-            "Ban a server member, optionally temporarily, after invoker approval.",
+            "Ban a server member permanently or temporarily when they must be excluded. This requires invoker approval.",
             run.clone(),
             ban,
         ),
-        Tool::new::<DeleteMessage, _, _, _>(
+        Tool::new(
             "moderation_delete_message",
-            "Delete one Discord message after invoker approval.",
+            "Delete one Discord message when specific content must be removed. This requires invoker approval.",
             run.clone(),
             delete_message,
         ),
-        Tool::new::<Purge, _, _, _>(
+        Tool::new(
             "moderation_purge",
-            "Bulk-delete matching recent messages after invoker approval.",
+            "Bulk-delete matching recent messages when a channel needs cleanup. This requires invoker approval.",
             run.clone(),
             purge,
         ),
-        Tool::new::<Cases, _, _, _>(
+        Tool::new(
             "moderation_cases",
-            "List the newest moderation cases for a user. Requires Moderate Members.",
+            "List the newest moderation cases when reviewing a user's moderation history. The invoker must have Moderate Members.",
             run.clone(),
             cases,
         ),

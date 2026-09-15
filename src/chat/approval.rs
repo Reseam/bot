@@ -18,12 +18,7 @@ const DENY: &str = "approval:deny";
 
 impl Run {
     pub async fn approve(&self, tool: &str, action: &str) -> Result<()> {
-        if self
-            .grants
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains(tool)
-        {
+        if self.grants.lock().contains(tool) {
             return Ok(());
         }
 
@@ -101,10 +96,7 @@ impl Run {
             };
         };
         if decision == Decision::ApprovedForRun {
-            self.grants
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(tool.to_owned());
+            self.grants.lock().insert(tool.to_owned());
         }
         let outcome = decision.label(tool);
         pending.finish(outcome.clone()).await?;

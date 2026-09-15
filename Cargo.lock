@@ -2288,6 +2288,7 @@ dependencies = [
  "humantime",
  "ignore",
  "image",
+ "parking_lot",
  "pdf-extract",
  "poise",
  "quick-xml",

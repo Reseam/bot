@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
+use parking_lot::Mutex;
 use reqwest::Url;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -23,7 +25,7 @@ pub struct RepoLocks(Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>);
 
 impl RepoLocks {
     fn get(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = lock(&self.0);
+        let mut locks = self.0.lock();
         locks.retain(|_, lock| lock.strong_count() > 0);
         locks.get(path).and_then(Weak::upgrade).unwrap_or_else(|| {
             let entry = Arc::new(tokio::sync::Mutex::new(()));
@@ -33,16 +35,10 @@ impl RepoLocks {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 pub(super) fn tool(run: &Arc<Run>) -> Tool {
-    Tool::new::<CloneRepo, _, _, _>(
+    Tool::new(
         "repo_clone",
-        "Clone an HTTPS git repository or update its existing working copy.",
+        "Clone an HTTPS git repository or update its existing working copy when repository files need to be inspected.",
         run.clone(),
         clone_repo,
     )
@@ -189,7 +185,7 @@ pub(super) async fn clone_checkout(
     })
 }
 
-fn git_auth(forges: &BTreeMap<String, Forge>, host: &str) -> Option<String> {
+pub(super) fn git_auth(forges: &BTreeMap<String, Forge>, host: &str) -> Option<String> {
     forges.values().find_map(|forge| {
         let forge_host = Url::parse(&forge.base_url)
             .ok()
@@ -201,9 +197,14 @@ fn git_auth(forges: &BTreeMap<String, Forge>, host: &str) -> Option<String> {
                     .and_then(|value| value.strip_prefix("api."))
                     == Some(host);
         matches.then(|| {
-            forge.token.as_ref().map(|token| match forge.kind {
-                ForgeKind::GitHub => format!("Authorization: Bearer {token}"),
-                ForgeKind::Forgejo => format!("Authorization: token {token}"),
+            forge.token.as_ref().map(|token| {
+                let username = match forge.kind {
+                    ForgeKind::GitHub => "x-access-token",
+                    ForgeKind::Forgejo => "oauth2",
+                };
+                let credentials =
+                    base64::engine::general_purpose::STANDARD.encode(format!("{username}:{token}"));
+                format!("Authorization: Basic {credentials}")
             })
         })?
     })
@@ -231,8 +232,13 @@ async fn run_git(
         }
     };
     if !output.status.success() {
+        let mode = if auth.is_some() {
+            " using configured credentials"
+        } else {
+            ""
+        };
         bail!(
-            "git failed: {}",
+            "git failed{mode}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )
     }

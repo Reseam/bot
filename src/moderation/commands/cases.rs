@@ -105,7 +105,9 @@ async fn case_delete(ctx: Context<'_>, id: i64) -> Result<()> {
     if affected == 0 {
         bail!("moderation case not found");
     }
-    ctx.say(format!("Deleted case #{id}.")).await?;
+    ctx.say(format!("Deleted case #{id}."))
+        .await
+        .context("failed to send case deletion result")?;
     Ok(())
 }
 
@@ -120,7 +122,8 @@ async fn modlog(ctx: Context<'_>, channel: Option<serenity::GuildChannel>) -> Re
     if let Some(channel) = channel {
         actions::set_mod_log(&ctx.data().db, guild_id, channel.id).await?;
         ctx.say(format!("Moderation log set to <#{}>.", channel.id))
-            .await?;
+            .await
+            .context("failed to send moderation log result")?;
         return Ok(());
     }
     let current = sqlx::query_scalar::<_, Option<i64>>(
@@ -143,6 +146,7 @@ async fn modlog(ctx: Context<'_>, channel: Option<serenity::GuildChannel>) -> Re
 
 async fn ephemeral(ctx: Context<'_>, content: String) -> Result<()> {
     ctx.send(poise::CreateReply::new().content(content).ephemeral(true))
-        .await?;
+        .await
+        .context("failed to send ephemeral moderation response")?;
     Ok(())
 }

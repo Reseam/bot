@@ -26,14 +26,19 @@ pub(crate) fn require_permissions(
     channel_id: serenity::ChannelId,
     required: &[(serenity::Permissions, &'static str)],
 ) -> Result<serenity::GuildChannel> {
-    let (channel, permissions) = resolve_channel(discord, guild_id, member, channel_id)?;
+    let access = resolve_channel(discord, guild_id, member, channel_id)?;
     if let Some((_, name)) = required
         .iter()
-        .find(|(permission, _)| !permissions.contains(*permission))
+        .find(|(permission, _)| !access.permissions.contains(*permission))
     {
         bail!("invoker is missing {name} in this channel");
     }
-    Ok(channel)
+    Ok(access.channel)
+}
+
+pub(crate) struct ChannelAccess {
+    pub channel: serenity::GuildChannel,
+    pub permissions: serenity::Permissions,
 }
 
 pub(crate) fn resolve_channel(
@@ -41,7 +46,7 @@ pub(crate) fn resolve_channel(
     guild_id: serenity::GuildId,
     member: &serenity::Member,
     channel_id: serenity::ChannelId,
-) -> Result<(serenity::GuildChannel, serenity::Permissions)> {
+) -> Result<ChannelAccess> {
     let guild = discord
         .cache
         .guild(guild_id)
@@ -64,7 +69,10 @@ pub(crate) fn resolve_channel(
         channel
     };
     let permissions = guild.user_permissions_in(permission_channel, member);
-    Ok((channel.clone(), permissions))
+    Ok(ChannelAccess {
+        channel: channel.clone(),
+        permissions,
+    })
 }
 
 pub(crate) const fn is_thread(kind: serenity::ChannelType) -> bool {

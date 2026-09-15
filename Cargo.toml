@@ -16,6 +16,7 @@ ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pdf-extract = "0.12"
 poise = "0.7"
+parking_lot = "0.12"
 quick-xml = "0.42"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream", "rustls", "http2"] }

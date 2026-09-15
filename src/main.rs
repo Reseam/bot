@@ -154,6 +154,23 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             }
         }
         poise::FrameworkError::GuildOnly { .. } => {}
+        poise::FrameworkError::Command { error, ctx, .. } => {
+            let message = format!("{error:#}");
+            error!(error = %message, command = %ctx.command().qualified_name, "Discord command failed");
+            if let Err(report_error) = ctx
+                .send(
+                    poise::CreateReply::new()
+                        .content(crate::text::truncate_chars(
+                            &message,
+                            crate::text::DISCORD_MESSAGE_LIMIT,
+                        ))
+                        .ephemeral(true),
+                )
+                .await
+            {
+                error!(?report_error, "failed to send command error");
+            }
+        }
         other => {
             error!(error = %other, "Discord framework error");
             if let Err(error) = poise::builtins::on_error(other).await {

@@ -34,17 +34,22 @@ pub async fn build(
     guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
     invoker: &serenity::Member,
+    include_history: bool,
     input: ContextInput,
 ) -> Result<Vec<Message>> {
-    let mut history = channel_id
-        .messages(
-            discord,
-            serenity::GetMessages::new()
-                .before(input.before)
-                .limit(app.config.agent.history_messages),
-        )
-        .await
-        .context("failed to fetch channel history")?;
+    let mut history = if include_history {
+        channel_id
+            .messages(
+                discord,
+                serenity::GetMessages::new()
+                    .before(input.before)
+                    .limit(app.config.agent.history_messages),
+            )
+            .await
+            .context("failed to fetch channel history")?
+    } else {
+        Vec::new()
+    };
     history.reverse();
 
     let mut context_text = history

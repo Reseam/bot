@@ -21,9 +21,9 @@ const MAX_TIMEOUT_SECS: u64 = 600;
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
-    vec![Tool::new::<Shell, _, _, _>(
+    vec![Tool::new(
         "shell",
-        "Run a bash command in the isolated workspace or a cloned repository after approval.",
+        "Run a bash command for work the specialized tools cannot perform. This requires approval, and it must never be used to clone repositories.",
         run.clone(),
         shell,
     )]
@@ -179,57 +179,4 @@ fn preserved_environment() -> Vec<(&'static str, OsString)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Instant;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn timeout_kills_the_process_group_promptly() -> Result<()> {
-        let start = Instant::now();
-        let output = execute(
-            "sleep 30 & sleep 30; wait",
-            Path::new("/tmp"),
-            1,
-            &CancellationToken::new(),
-        )
-        .await?;
-        assert!(output.starts_with("timed out after 1s"));
-        assert!(start.elapsed() < Duration::from_secs(5));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn timeout_does_not_wait_forever_for_an_escaped_pipe() -> Result<()> {
-        let start = Instant::now();
-        let output = execute(
-            "setsid sleep 7 & sleep 30",
-            Path::new("/tmp"),
-            1,
-            &CancellationToken::new(),
-        )
-        .await?;
-        assert!(output.starts_with("timed out after 1s"));
-        assert!(start.elapsed() < Duration::from_secs(8));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn clears_environment_and_captures_ordered_output() -> Result<()> {
-        let output = execute(
-            "printf 'one\\n'; printf 'two\\n' >&2; env | sort",
-            Path::new("/tmp"),
-            5,
-            &CancellationToken::new(),
-        )
-        .await?;
-        assert!(output.starts_with("exit status: 0\none\ntwo\n"));
-        let variables = output.lines().skip(3).collect::<Vec<_>>();
-        assert!(variables.iter().all(|line| {
-            ["HOME=", "LANG=", "PATH=", "PWD=", "SHLVL=", "TERM=", "_="]
-                .iter()
-                .any(|prefix| line.starts_with(prefix))
-        }));
-        Ok(())
-    }
-}
+mod tests;

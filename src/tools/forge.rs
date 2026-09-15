@@ -28,39 +28,49 @@ pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
         .join(", ");
     let suffix = format!(" Configured forges: {configured}.");
     vec![
-        Tool::new::<SearchIssues, _, _, _>(
+        Tool::new(
             "forge_search_issues",
-            format!("Search issues and pull requests.{suffix}"),
+            format!(
+                "Search issues and pull requests when you need to find existing forge work.{suffix}"
+            ),
             run.clone(),
             search_issues,
         ),
-        Tool::new::<GetNumbered, _, _, _>(
+        Tool::new(
             "forge_get_issue",
-            format!("Get an issue and up to 50 comments.{suffix}"),
+            format!(
+                "Get an issue and up to 50 comments when you need its full discussion.{suffix}"
+            ),
             run.clone(),
             get_issue,
         ),
-        Tool::new::<ListPullRequests, _, _, _>(
+        Tool::new(
             "forge_list_pull_requests",
-            format!("List pull requests.{suffix}"),
+            format!("List pull requests when you need to inspect current or past changes.{suffix}"),
             run.clone(),
             list_pull_requests,
         ),
-        Tool::new::<GetNumbered, _, _, _>(
+        Tool::new(
             "forge_get_pull_request",
-            format!("Get a pull request and its unified diff.{suffix}"),
+            format!(
+                "Get a pull request and its unified diff when you need to review its details or code changes.{suffix}"
+            ),
             run.clone(),
             get_pull_request,
         ),
-        Tool::new::<CreateIssue, _, _, _>(
+        Tool::new(
             "forge_create_issue",
-            format!("Create an issue after approval.{suffix}"),
+            format!(
+                "Create an issue when the user wants work tracked. This requires approval.{suffix}"
+            ),
             run.clone(),
             create_issue,
         ),
-        Tool::new::<Comment, _, _, _>(
+        Tool::new(
             "forge_comment",
-            format!("Comment on an issue or pull request after approval.{suffix}"),
+            format!(
+                "Comment on an issue or pull request when the user wants to respond on the forge. This requires approval.{suffix}"
+            ),
             run.clone(),
             comment,
         ),
@@ -80,10 +90,11 @@ struct SearchIssues {
 }
 
 async fn search_issues(run: Arc<Run>, args: SearchIssues) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
     let limit = limit(args.limit)?;
-    let issues = forge
-        .search_issues(repo, &args.query, args.state, &args.labels, limit)
+    let issues = selected
+        .forge
+        .search_issues(selected.repo, &args.query, args.state, &args.labels, limit)
         .await?;
     json_output(&issues)
 }
@@ -97,8 +108,8 @@ struct GetNumbered {
 }
 
 async fn get_issue(run: Arc<Run>, args: GetNumbered) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
-    json_output(&forge.get_issue(repo, args.number).await?)
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
+    json_output(&selected.forge.get_issue(selected.repo, args.number).await?)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -111,17 +122,23 @@ struct ListPullRequests {
 }
 
 async fn list_pull_requests(run: Arc<Run>, args: ListPullRequests) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
     json_output(
-        &forge
-            .list_pull_requests(repo, args.state, limit(args.limit)?)
+        &selected
+            .forge
+            .list_pull_requests(selected.repo, args.state, limit(args.limit)?)
             .await?,
     )
 }
 
 async fn get_pull_request(run: Arc<Run>, args: GetNumbered) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
-    json_output(&forge.get_pull_request(repo, args.number).await?)
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
+    json_output(
+        &selected
+            .forge
+            .get_pull_request(selected.repo, args.number)
+            .await?,
+    )
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -136,18 +153,20 @@ struct CreateIssue {
 }
 
 async fn create_issue(run: Arc<Run>, args: CreateIssue) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
     let preview = format!(
-        "Create issue\nForge: {}\nRepo: {repo}\nTitle: {}\nLabels: {}\n\n{}",
+        "Create issue\nForge: {}\nRepo: {}\nTitle: {}\nLabels: {}\n\n{}",
         args.forge,
+        selected.repo,
         args.title,
         display_labels(&args.labels),
         truncate_chars(&args.body, PREVIEW_BODY_LIMIT)
     );
     run.approve("forge_create_issue", &preview).await?;
     let body = with_footer(&run, &args.body);
-    let issue = forge
-        .create_issue(repo, &args.title, &body, &args.labels)
+    let issue = selected
+        .forge
+        .create_issue(selected.repo, &args.title, &body, &args.labels)
         .await?;
     Ok(ToolOutput::text(format!(
         "Created issue #{}: {}",
@@ -165,21 +184,28 @@ struct Comment {
 }
 
 async fn comment(run: Arc<Run>, args: Comment) -> Result<ToolOutput> {
-    let (forge, repo) = selected(&run, &args.forge, args.repo.as_deref())?;
+    let selected = selected(&run, &args.forge, args.repo.as_deref())?;
     let preview = format!(
-        "Comment on {} {repo} #{}\n\n{}",
+        "Comment on {} {} #{}\n\n{}",
         args.forge,
+        selected.repo,
         args.number,
         truncate_chars(&args.body, PREVIEW_BODY_LIMIT)
     );
     run.approve("forge_comment", &preview).await?;
-    let url = forge
-        .comment(repo, args.number, &with_footer(&run, &args.body))
+    let url = selected
+        .forge
+        .comment(selected.repo, args.number, &with_footer(&run, &args.body))
         .await?;
     Ok(ToolOutput::text(format!("Created comment: {url}")))
 }
 
-fn selected<'a>(run: &'a Run, name: &str, repo: Option<&'a str>) -> Result<(&'a Forge, &'a str)> {
+struct ForgeSelection<'a> {
+    forge: &'a Forge,
+    repo: &'a str,
+}
+
+fn selected<'a>(run: &'a Run, name: &str, repo: Option<&'a str>) -> Result<ForgeSelection<'a>> {
     let forge = run
         .app
         .forges
@@ -189,7 +215,7 @@ fn selected<'a>(run: &'a Run, name: &str, repo: Option<&'a str>) -> Result<(&'a 
         .or(forge.default_repo.as_deref())
         .context("repo is required because this forge has no default_repo")?;
     validate_repo(repo)?;
-    Ok((forge, repo))
+    Ok(ForgeSelection { forge, repo })
 }
 
 fn limit(value: Option<u8>) -> Result<u8> {

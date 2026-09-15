@@ -12,30 +12,31 @@ use crate::tools::{Snowflake, Tool, ToolOutput};
 
 const DEFAULT_ARCHIVE_MINUTES: u16 = 1_440;
 const MESSAGE_LIMIT: usize = 2_000;
+const PIN_MESSAGES: serenity::Permissions = serenity::Permissions::from_bits_retain(1 << 51);
 
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
     vec![
-        Tool::new::<SendMessage, _, _, _>(
+        Tool::new(
             "discord_send_message",
-            "Send a Discord message without pinging anyone. Sending outside the current channel requires approval.",
+            "Send a Discord message when the user asks you to post or reply. Sending outside the current channel requires approval.",
             run.clone(),
             send_message,
         ),
-        Tool::new::<AddReaction, _, _, _>(
+        Tool::new(
             "discord_add_reaction",
-            "Add a Unicode or custom emoji reaction to a Discord message.",
+            "Add a Unicode or custom emoji reaction when the user wants to acknowledge or mark a Discord message.",
             run.clone(),
             add_reaction,
         ),
-        Tool::new::<CreateThread, _, _, _>(
+        Tool::new(
             "discord_create_thread",
-            "Create a public thread, optionally attached to a message.",
+            "Create a public thread, optionally attached to a message, when a discussion needs its own space.",
             run.clone(),
             create_thread,
         ),
-        Tool::new::<PinMessage, _, _, _>(
+        Tool::new(
             "discord_pin_message",
-            "Pin or unpin a Discord message.",
+            "Pin or unpin a Discord message when important information should be preserved or removed from the channel pins.",
             run.clone(),
             pin_message,
         ),
@@ -56,9 +57,8 @@ async fn send_message(run: Arc<Run>, args: SendMessage) -> Result<ToolOutput> {
         bail!("content must be between 1 and 2000 characters");
     }
     let channel_id = serenity::ChannelId::new(args.channel_id.get());
-    let (channel, permissions) =
-        resolve_channel(&run.discord, run.guild_id, &run.invoker, channel_id)?;
-    let required = if is_thread(channel.kind) {
+    let access = resolve_channel(&run.discord, run.guild_id, &run.invoker, channel_id)?;
+    let required = if is_thread(access.channel.kind) {
         (
             serenity::Permissions::SEND_MESSAGES_IN_THREADS,
             "SEND_MESSAGES_IN_THREADS",
@@ -66,14 +66,14 @@ async fn send_message(run: Arc<Run>, args: SendMessage) -> Result<ToolOutput> {
     } else {
         (serenity::Permissions::SEND_MESSAGES, "SEND_MESSAGES")
     };
-    if !permissions.contains(required.0) {
+    if !access.permissions.contains(required.0) {
         bail!("invoker is missing {} in this channel", required.1);
     }
     if channel_id != run.channel_id {
         let preview = truncate_chars(&args.content.replace('\n', " "), 300);
         run.approve(
             "discord_send_message",
-            &format!("Send to #{}:\n> {preview}", channel.name),
+            &format!("Send to #{}:\n> {preview}", access.channel.name),
         )
         .await?;
     }
@@ -201,13 +201,13 @@ struct PinMessage {
 
 async fn pin_message(run: Arc<Run>, args: PinMessage) -> Result<ToolOutput> {
     let channel_id = channel_id(&run, args.channel_id);
-    require_permissions(
-        &run.discord,
-        run.guild_id,
-        &run.invoker,
-        channel_id,
-        &[(serenity::Permissions::MANAGE_MESSAGES, "MANAGE_MESSAGES")],
-    )?;
+    let access = resolve_channel(&run.discord, run.guild_id, &run.invoker, channel_id)?;
+    if !access
+        .permissions
+        .intersects(PIN_MESSAGES | serenity::Permissions::MANAGE_MESSAGES)
+    {
+        bail!("invoker is missing PIN_MESSAGES or MANAGE_MESSAGES in this channel");
+    }
     let message_id = serenity::MessageId::new(args.message_id.get());
     if args.pinned {
         channel_id
@@ -228,23 +228,4 @@ async fn pin_message(run: Arc<Run>, args: PinMessage) -> Result<ToolOutput> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_unicode_and_custom_emoji_arguments() -> Result<()> {
-        assert_eq!(
-            parse_emoji("✅")?,
-            serenity::ReactionType::Unicode("✅".to_owned())
-        );
-        let expected = serenity::ReactionType::Custom {
-            animated: false,
-            id: serenity::EmojiId::new(123),
-            name: Some("reseam".to_owned()),
-        };
-        assert_eq!(parse_emoji("<:reseam:123>")?, expected);
-        assert_eq!(parse_emoji("reseam:123")?, expected);
-        assert!(parse_emoji("<:broken>").is_err());
-        Ok(())
-    }
-}
+mod tests;

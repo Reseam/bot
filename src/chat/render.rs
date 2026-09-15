@@ -18,12 +18,27 @@ pub enum FinalState {
 pub struct Renderer {
     messages: Vec<serenity::Message>,
     answer: String,
-    running: Vec<(String, String)>,
-    used: Vec<(String, bool)>,
+    running: Vec<RunningTool>,
+    used: Vec<UsedTool>,
     rendered: Vec<String>,
     last_edit: Instant,
     separate_next_text: bool,
     compacted: bool,
+}
+
+struct RunningTool {
+    id: String,
+    name: String,
+}
+
+struct UsedTool {
+    name: String,
+    failed: bool,
+}
+
+struct ToolCount {
+    name: String,
+    count: usize,
 }
 
 impl Renderer {
@@ -71,17 +86,23 @@ impl Renderer {
             AgentEvent::Text(text) => {
                 self.compacted = false;
                 if self.separate_next_text {
-                    self.answer.push_str("\n\n");
+                    self.answer.truncate(self.answer.trim_end().len());
+                    if !self.answer.is_empty() {
+                        self.answer.push_str("\n\n");
+                    }
                     self.separate_next_text = false;
                 }
                 self.answer.push_str(&text);
             }
             AgentEvent::ToolStarted { id, name } => {
-                self.running.push((id, name));
+                self.running.push(RunningTool { id, name });
             }
             AgentEvent::ToolFinished { id, name, is_error } => {
-                self.running.retain(|(running_id, _)| running_id != &id);
-                self.used.push((name, is_error));
+                self.running.retain(|running| running.id != id);
+                self.used.push(UsedTool {
+                    name,
+                    failed: is_error,
+                });
             }
             AgentEvent::Compacted => self.compacted = true,
         }
@@ -101,7 +122,7 @@ impl Renderer {
                 "-# Running {}…",
                 self.running
                     .iter()
-                    .map(|(_, name)| name.as_str())
+                    .map(|tool| tool.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -137,7 +158,7 @@ impl Renderer {
         with_stop: bool,
     ) -> Result<Vec<serenity::MessageId>> {
         let footer = truncate_chars(footer, FOOTER_LIMIT.saturating_sub(2));
-        let mut chunks = split_message(&self.answer, ANSWER_LIMIT);
+        let mut chunks = split_message(self.answer.trim_end(), ANSWER_LIMIT);
         if chunks.is_empty() {
             chunks.push(String::new());
         }
@@ -211,24 +232,27 @@ fn stop_components(message_id: serenity::MessageId) -> Vec<serenity::CreateActio
     ])]
 }
 
-fn used_footer(used: &[(String, bool)]) -> String {
-    let mut counts = Vec::<(String, usize)>::new();
+fn used_footer(used: &[UsedTool]) -> String {
+    let mut counts = Vec::<ToolCount>::new();
     let mut failures = 0;
-    for (name, failed) in used {
-        failures += usize::from(*failed);
-        if let Some((_, count)) = counts.iter_mut().find(|(seen, _)| seen == name) {
-            *count += 1;
+    for tool in used {
+        failures += usize::from(tool.failed);
+        if let Some(seen) = counts.iter_mut().find(|seen| seen.name == tool.name) {
+            seen.count += 1;
         } else {
-            counts.push((name.clone(), 1));
+            counts.push(ToolCount {
+                name: tool.name.clone(),
+                count: 1,
+            });
         }
     }
     let tools = counts
         .into_iter()
-        .map(|(name, count)| {
-            if count == 1 {
-                name
+        .map(|tool| {
+            if tool.count == 1 {
+                tool.name
             } else {
-                format!("{name} ×{count}")
+                format!("{} ×{}", tool.name, tool.count)
             }
         })
         .collect::<Vec<_>>()

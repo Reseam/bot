@@ -1,5 +1,7 @@
-use super::clone::{RepoUrl, clone_checkout};
+use super::clone::{RepoUrl, clone_checkout, git_auth};
 use super::*;
+use crate::config::{ForgeConfig, ForgeKind};
+use crate::forge::Forge;
 
 #[test]
 fn validates_repository_urls() {
@@ -12,6 +14,39 @@ fn validates_repository_urls() {
     assert!(RepoUrl::parse("ssh://github.com/owner/repo").is_err());
     assert!(RepoUrl::parse("https://github.com/owner/../repo").is_err());
     assert!(RepoUrl::parse("https://github.com/owner/repo/extra").is_err());
+}
+
+#[test]
+fn git_auth_uses_provider_specific_basic_credentials() -> Result<()> {
+    let github = Forge::new(&ForgeConfig {
+        kind: ForgeKind::GitHub,
+        url: "https://api.github.com".to_owned(),
+        token: "secret".to_owned(),
+        default_repo: None,
+    })?;
+    let forgejo = Forge::new(&ForgeConfig {
+        kind: ForgeKind::Forgejo,
+        url: "https://code.example.com".to_owned(),
+        token: "secret".to_owned(),
+        default_repo: None,
+    })?;
+    assert_eq!(
+        git_auth(
+            &std::collections::BTreeMap::from([("github".to_owned(), github)]),
+            "github.com"
+        )
+        .as_deref(),
+        Some("Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0")
+    );
+    assert_eq!(
+        git_auth(
+            &std::collections::BTreeMap::from([("forgejo".to_owned(), forgejo)]),
+            "code.example.com"
+        )
+        .as_deref(),
+        Some("Authorization: Basic b2F1dGgyOnNlY3JldA==")
+    );
+    Ok(())
 }
 
 #[cfg(unix)]

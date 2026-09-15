@@ -131,6 +131,7 @@ async fn ask_about_this(
             invoker: member,
             prompt: input.question,
             attachment: None,
+            include_history: true,
             history_before: Some(message.id),
             referenced: Some(Box::new(message)),
         },
@@ -159,21 +160,28 @@ async fn launch_summary(
         .map(|message| format_message(ctx.serenity_context(), guild_id, message))
         .collect::<Vec<_>>();
     let budget = usize::try_from(ctx.data().config.llm.context_window).unwrap_or(usize::MAX);
-    let (history, dropped, partial) = trim_history(&formatted, budget);
-    let omission = match (dropped, partial) {
+    let trimmed = trim_history(&formatted, budget);
+    let omission = match (trimmed.dropped, trimmed.partial) {
         (0, false) => String::new(),
         (0, true) => {
             "\nThe start of the oldest retained message was trimmed for the context budget."
                 .to_owned()
         }
-        (_, false) => format!("\n{dropped} older messages were dropped for the context budget."),
+        (_, false) => format!(
+            "\n{} older messages were dropped for the context budget.",
+            trimmed.dropped
+        ),
         (_, true) => format!(
-            "\n{dropped} older messages were dropped and the next message was partially trimmed for the context budget."
+            "\n{} older messages were dropped and the next message was partially trimmed for the context budget.",
+            trimmed.dropped
         ),
     };
     let prompt = format!(
         "Summarize the following discussion from #{} (channel {}). Cover topics, decisions, open questions, and action items with owners. Link key messages using https://discord.com/channels/{guild_id}/{}/MESSAGE_ID.{omission}\n\nUNTRUSTED DISCUSSION TO SUMMARIZE:\n{history}",
-        channel.name, channel.id, channel.id
+        channel.name,
+        channel.id,
+        channel.id,
+        history = trimmed.text
     );
     let anchor = format!(
         "**{} asked for a summary of #{}** ({count} messages)",
@@ -190,6 +198,7 @@ async fn launch_summary(
             invoker: member,
             prompt,
             attachment: None,
+            include_history: false,
             history_before: None,
             referenced: None,
         },
@@ -274,10 +283,21 @@ async fn fetch_after(
     Ok(messages)
 }
 
-fn trim_history(messages: &[String], budget: usize) -> (String, usize, bool) {
+#[derive(Debug, Eq, PartialEq)]
+struct TrimmedHistory {
+    text: String,
+    dropped: usize,
+    partial: bool,
+}
+
+fn trim_history(messages: &[String], budget: usize) -> TrimmedHistory {
     let joined = messages.join("\n\n");
     if joined.chars().count() <= budget {
-        return (joined, 0, false);
+        return TrimmedHistory {
+            text: joined,
+            dropped: 0,
+            partial: false,
+        };
     }
     let mut first = messages.len().saturating_sub(1);
     let mut used = 0;
@@ -304,41 +324,12 @@ fn trim_history(messages: &[String], budget: usize) -> (String, usize, bool) {
     } else {
         retained
     };
-    (retained, first, partial)
+    TrimmedHistory {
+        text: retained,
+        dropped: first,
+        partial,
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duration_parser_accepts_compound_values_and_rejects_edges() -> Result<()> {
-        assert_eq!(
-            parse_duration("2h 30m")?,
-            std::time::Duration::from_secs(9_000)
-        );
-        assert!(parse_duration("").is_err());
-        assert!(parse_duration("0s").is_err());
-        assert!(parse_duration("tomorrow").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn history_budget_keeps_newest_complete_messages() {
-        let messages = vec![
-            "oldest".to_owned(),
-            "middle".to_owned(),
-            "newest".to_owned(),
-        ];
-        assert_eq!(
-            trim_history(&messages, 16),
-            ("middle\n\nnewest".to_owned(), 1, false)
-        );
-    }
-
-    #[test]
-    fn history_budget_keeps_suffix_of_oversized_newest_message() {
-        let messages = vec!["old".to_owned(), "abcdefgh".to_owned()];
-        assert_eq!(trim_history(&messages, 4), ("efgh".to_owned(), 1, true));
-    }
-}
+mod tests;

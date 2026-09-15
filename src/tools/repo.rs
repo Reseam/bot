@@ -22,21 +22,21 @@ pub use clone::RepoLocks;
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
     vec![
         clone::tool(run),
-        Tool::new::<ListRepo, _, _, _>(
+        Tool::new(
             "repo_list",
-            "List files and directories in a cloned repository, respecting .gitignore.",
+            "List files and directories in a cloned repository, respecting .gitignore, when you need to explore its structure.",
             run.clone(),
             list_repo,
         ),
-        Tool::new::<ReadRepo, _, _, _>(
+        Tool::new(
             "repo_read",
-            "Read numbered lines from a non-binary file in a cloned repository.",
+            "Read numbered lines from a non-binary file in a cloned repository when you need to inspect its contents.",
             run.clone(),
             read_repo,
         ),
-        Tool::new::<GrepRepo, _, _, _>(
+        Tool::new(
             "repo_grep",
-            "Search cloned repository files with a regular expression.",
+            "Search cloned repository files with a regular expression when you need to locate code or text.",
             run.clone(),
             grep_repo,
         ),

@@ -13,15 +13,15 @@ const DEFAULT_MEMBER_LIMIT: u8 = 10;
 
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
     vec![
-        Tool::new::<MemberInfo, _, _, _>(
+        Tool::new(
             "discord_member_info",
-            "Get profile, roles, dates, and current-channel permissions for a server member.",
+            "Get profile, roles, dates, and current-channel permissions when detailed information about a server member is needed.",
             run.clone(),
             member_info,
         ),
-        Tool::new::<SearchMembers, _, _, _>(
+        Tool::new(
             "discord_search_members",
-            "Search server members by username or nickname prefix.",
+            "Search server members by username or nickname prefix when you need to identify a user or obtain their ID.",
             run.clone(),
             search_members,
         ),

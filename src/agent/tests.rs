@@ -71,9 +71,12 @@ struct EchoArgs {
 }
 
 fn echo_tool() -> Tool {
-    Tool::new::<EchoArgs, _, _, _>("echo", "Echo text", (), |_state, arguments| async move {
-        Ok(ToolOutput::text(arguments.text))
-    })
+    Tool::new(
+        "echo",
+        "Echo text",
+        (),
+        |_state, arguments: EchoArgs| async move { Ok(ToolOutput::text(arguments.text)) },
+    )
 }
 
 async fn run_agent(
@@ -136,14 +139,18 @@ async fn parallel_tools_finish_without_deadlock_and_keep_source_order() -> Resul
     let (_server, llm) =
         llm_with_responses(vec![tool_turn(calls, "tool_calls"), assistant_text("done")]).await?;
     let barrier = Arc::new(Barrier::new(2));
-    let tool =
-        Tool::new::<EchoArgs, _, _, _>("wait", "Wait together", (), move |_state, arguments| {
+    let tool = Tool::new(
+        "wait",
+        "Wait together",
+        (),
+        move |_state, arguments: EchoArgs| {
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
                 Ok(ToolOutput::text(arguments.text))
             }
-        });
+        },
+    );
     let tools = ToolSet::new(vec![tool]);
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();

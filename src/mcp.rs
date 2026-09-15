@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures::future::join_all;
+use parking_lot::RwLock;
 use rmcp::model::Tool as McpTool;
 use rmcp::service::{Peer, RoleClient, RunningService};
 use serde_json::Value;
@@ -91,14 +92,7 @@ impl Mcp {
     pub fn tools(&self) -> Vec<ExposedTool> {
         self.servers
             .values()
-            .flat_map(|server| {
-                server
-                    .state
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .tools
-                    .clone()
-            })
+            .flat_map(|server| server.state.read().tools.clone())
             .collect()
     }
 
@@ -106,10 +100,7 @@ impl Mcp {
         self.servers
             .values()
             .map(|server| {
-                let state = server
-                    .state
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let state = server.state.read();
                 ServerStatus {
                     name: server.name.clone(),
                     transport: server.transport(),
@@ -165,12 +156,7 @@ impl Mcp {
 
     pub async fn shutdown(&self) {
         join_all(self.servers.values().map(|server| async move {
-            let client = server
-                .state
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .client
-                .take();
+            let client = server.state.write().client.take();
             if let Some(mut client) = client
                 && let Err(error) = client.close_with_timeout(CLOSE_TIMEOUT).await
             {
@@ -183,10 +169,7 @@ impl Mcp {
 
 impl Server {
     fn peer(&self) -> Result<(Peer<RoleClient>, u64)> {
-        let state = self
-            .state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self.state.read();
         let peer = state
             .client
             .as_ref()
@@ -210,11 +193,7 @@ impl Server {
 
     async fn reconnect_if_current(&self, generation: u64) -> Result<()> {
         let _guard = self.reconnect.lock().await;
-        let current = self
-            .state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .generation;
+        let current = self.state.read().generation;
         if current != generation {
             return Ok(());
         }
@@ -245,10 +224,7 @@ impl Server {
         info!(server = %self.name, transport = self.transport(), tools = ?names, "MCP server connected");
 
         let old = {
-            let mut state = self
-                .state
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self.state.write();
             let old = state.client.replace(client);
             state.tools = exposed;
             state.error = None;
@@ -266,10 +242,7 @@ impl Server {
     async fn mark_failed(&self, error: anyhow::Error) -> Result<()> {
         let error = redact_error(&self.config, &format!("{error:#}"));
         let old = {
-            let mut state = self
-                .state
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self.state.write();
             let old = state.client.take();
             state.tools.clear();
             state.error = Some(error.clone());
@@ -299,15 +272,24 @@ fn expose_tools(server: &str, config: &McpServerConfig, tools: Vec<McpTool>) -> 
             let name = sanitize_tool_name(server, &original_name);
             let schema = Value::Object((*tool.input_schema).clone());
             let (parameters, schema_note) = normalize_schema(schema);
-            let mut description = format!(
-                "[{server}] {}",
-                tool.description
-                    .as_deref()
-                    .unwrap_or("No description provided.")
-            );
-            if let Some(note) = schema_note {
-                description.push_str(&format!(" Original input schema was not an object: {note}"));
+            let provided = tool
+                .description
+                .as_deref()
+                .unwrap_or("Perform the provider-defined operation")
+                .split(['.', '!', '?'])
+                .next()
+                .unwrap_or("Perform the provider-defined operation")
+                .trim();
+            let mut use_sentence =
+                "Use this MCP tool when this server's capability is needed".to_owned();
+            if config.approve.contains(&original_name) {
+                use_sentence.push_str("; approval is required");
             }
+            if let Some(note) = schema_note {
+                use_sentence.push_str("; its input schema was normalized from ");
+                use_sentence.push_str(&note.replace(['.', '!', '?'], ","));
+            }
+            let description = format!("[{server}] {provided}. {use_sentence}.");
             ExposedTool {
                 server: server.to_owned(),
                 original_name: original_name.clone(),

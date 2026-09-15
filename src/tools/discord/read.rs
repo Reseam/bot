@@ -21,31 +21,31 @@ const CHANNEL_TOPIC_LIMIT: usize = 200;
 
 pub fn tools(run: &Arc<Run>) -> Vec<Tool> {
     let mut tools = vec![
-        Tool::new::<ReadMessages, _, _, _>(
+        Tool::new(
             "discord_read_messages",
             "Read messages from a Discord channel when recent conversation context is insufficient. Results are returned oldest first.",
             run.clone(),
             read_messages,
         ),
-        Tool::new::<GetMessage, _, _, _>(
+        Tool::new(
             "discord_get_message",
-            "Get complete details for one Discord message.",
+            "Get complete details for one Discord message when its content, attachments, embeds, reactions, or metadata are needed.",
             run.clone(),
             get_message,
         ),
-        Tool::new::<NoArguments, _, _, _>(
+        Tool::new(
             "discord_list_channels",
-            "List the server's categories, visible channels, and active threads.",
+            "List the server's categories, visible channels, and active threads when you need to find or identify a channel.",
             run.clone(),
             list_channels,
         ),
-        Tool::new::<NoArguments, _, _, _>(
+        Tool::new(
             "discord_server_info",
-            "Get server metadata, roles, features, and expression counts.",
+            "Get server metadata, roles, features, and expression counts when answering questions about the Discord server.",
             run.clone(),
             server_info,
         ),
-        Tool::new::<ViewAttachment, _, _, _>(
+        Tool::new(
             "discord_view_attachment",
             "Load an attachment from a Discord message when its contents are needed to answer the request. Images are returned as image input and documents as extracted text.",
             run.clone(),

@@ -223,7 +223,9 @@ async fn purge(
         deleted,
     )
     .await?;
-    ctx.say(format!("Deleted {deleted} messages.")).await?;
+    ctx.say(format!("Deleted {deleted} messages."))
+        .await
+        .context("failed to send purge result")?;
     Ok(())
 }
 
@@ -248,7 +250,8 @@ async fn slowmode(
         "Set slowmode in <#{}> to {seconds} seconds. Case #{}.",
         channel.id, outcome.case.id
     ))
-    .await?;
+    .await
+    .context("failed to send slowmode result")?;
     Ok(())
 }
 
@@ -303,7 +306,8 @@ async fn lock_command(
         channel.id,
         outcome.case.id
     ))
-    .await?;
+    .await
+    .context("failed to send channel lock result")?;
     Ok(())
 }
 
@@ -346,7 +350,8 @@ async fn action_reply(
         "{verb} <@{target}>. Case #{}.{dm}",
         outcome.case.id
     ))
-    .await?;
+    .await
+    .context("failed to send moderation result")?;
     Ok(())
 }
 

@@ -299,13 +299,13 @@ pub(super) fn require_actor_channel_permission(
     channel_id: serenity::ChannelId,
     required: serenity::Permissions,
 ) -> Result<()> {
-    let (_, permissions) = crate::tools::discord::resolve_channel(
+    let access = crate::tools::discord::resolve_channel(
         moderator.discord,
         moderator.guild_id,
         &moderator.actor,
         channel_id,
     )?;
-    if !permissions.contains(required) {
+    if !access.permissions.contains(required) {
         bail!(
             "invoker is missing {} in this channel",
             required.get_permission_names().join(", ")
