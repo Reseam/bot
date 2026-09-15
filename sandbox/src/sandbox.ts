@@ -1,9 +1,11 @@
 import {
   Bash,
+  type ByteString,
   type Command,
   decodeBytesToUtf8,
   defineCommand,
   InMemoryFs,
+  latin1FromBytes,
   MountableFs,
   OverlayFs,
   ReadWriteFs,
@@ -18,6 +20,7 @@ import type { BridgeCommand, ExecRequest, ExecResult, FetchResponse, Image } fro
 
 const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp"];
 const REPO_OVERLAY_BYTES = 256 * 1024 * 1024;
+const BINARY_MIN_SUSPICIOUS_CHARS = 8;
 const MAX_EXECUTION_MS = 30 * 60 * 1000;
 const PYTHON_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -61,20 +64,38 @@ async function run(sandbox: Sandbox, message: ExecRequest, cancelled: AbortSigna
   try {
     const bash = message.team ? sandbox.team : sandbox.member;
     const result = await bash.exec(message.command, { signal });
-    const stderr = timeout.aborted
-      ? `${result.stderr}timed out after ${message.timeout_ms / 1000}s\n`
-      : result.stderr;
+    const stderr = textOrOmitted(result.stderr);
     return {
       type: "exec_result",
       id: message.id,
-      stdout: stdoutKind(result) === "bytes" ? decodeBytesToUtf8(stdoutAsBytes(result)) : result.stdout,
-      stderr,
+      stdout:
+        stdoutKind(result) === "bytes" ? bytesOrOmitted(stdoutAsBytes(result)) : textOrOmitted(result.stdout),
+      stderr: timeout.aborted ? `${stderr}timed out after ${message.timeout_ms / 1000}s\n` : stderr,
       exit_code: result.exitCode,
       images: sandbox.images.splice(0),
     };
   } catch (error) {
     return failure(message.id, error, sandbox.images.splice(0));
   }
+}
+
+function bytesOrOmitted(bytes: ByteString): string {
+  return textOrOmitted(decodeBytesToUtf8(bytes), latin1FromBytes(bytes).length);
+}
+
+function textOrOmitted(text: string, bytes?: number): string {
+  let suspicious = 0;
+  for (const char of text) {
+    if (char === "\uFFFD" || (char < " " && char !== "\n" && char !== "\r" && char !== "\t" && char !== "\x1b")) {
+      suspicious++;
+    }
+  }
+  return suspicious >= BINARY_MIN_SUSPICIOUS_CHARS && suspicious * 10 > text.length ? omitted(bytes) : text;
+}
+
+function omitted(bytes: number | undefined): string {
+  const size = bytes === undefined ? "" : `: ${bytes} bytes`;
+  return `[binary output omitted${size}. Write binary data to a file with -o or > FILE instead of printing it.]\n`;
 }
 
 function failure(id: number, error: unknown, images: Image[]): ExecResult {

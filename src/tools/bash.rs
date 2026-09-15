@@ -10,7 +10,7 @@ use crate::chat::Run;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 1_800;
-const TEAM_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
+const TEAM_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use. Keep binary data in files: printed binary output is replaced with its byte count.
 
 Paths: /workspace is the writable working directory. /repos/<host>/<owner>/<name> holds repositories cloned with `repo clone`; edits there are discarded.
 
@@ -25,7 +25,7 @@ Bridge commands (run `COMMAND --help` for details):
 
 curl and upload reach any public host. Requests to configured forge APIs are authenticated automatically. POST, PUT, PATCH, and DELETE requests, moderation, and messages to other channels ask the invoker for approval.";
 
-const MEMBER_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
+const MEMBER_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use. Keep binary data in files: printed binary output is replaced with its byte count.
 
 Paths: /workspace is the writable working directory.
 
