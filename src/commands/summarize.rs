@@ -20,7 +20,7 @@ pub fn commands() -> Vec<Command> {
     slash_command,
     guild_only,
     ephemeral,
-    check = "crate::access::team_only"
+    check = "crate::access::ai_access"
 )]
 async fn summarize(
     ctx: Context<'_>,
@@ -83,7 +83,7 @@ async fn summarize(
     context_menu_command = "Summarize from here",
     guild_only,
     ephemeral,
-    check = "crate::access::team_only"
+    check = "crate::access::ai_access"
 )]
 async fn summarize_from_here(ctx: Context<'_>, message: serenity::Message) -> Result<()> {
     ctx.defer_ephemeral()
@@ -135,7 +135,7 @@ struct MessageQuestion {
 #[poise::command(
     context_menu_command = "Ask about this",
     guild_only,
-    check = "crate::access::team_only"
+    check = "crate::access::ai_access"
 )]
 async fn ask_about_this(
     ctx: poise::ApplicationContext<'_, Data, Error>,

@@ -4,12 +4,12 @@ Discord bot for the Reseam team with a built-in AI agent, plus moderation comman
 
 ## Using it
 
-Only owners (`access.owner_ids`) and members with a team role (`access.team_role_ids`) can use the AI. Moderation commands use normal Discord permissions instead.
+Only owners (`access.owner_ids`) and members with an access role (`access.role_ids`, the Team and AI Access roles) can use the AI. Moderation commands use normal Discord permissions instead.
 
 - **Mention the bot** or **reply to one of its messages**. It reads the message you replied to and any attached images, PDFs, DOCX, or text files, then streams its answer. It reads more of the channel on demand, and `agent.history_messages` (0 to 100, default 0) adds that many earlier messages up front. Press **Stop** to end a run.
 - **Reply to its answer** to continue the same conversation. Earlier turns and command output are kept in SQLite. Conversations are summarized once they pass `agent.compact_at_tokens`.
 - **Reply to its message while it is still working** to steer the run. The bot reacts with 👀 when your message is picked up.
-- **Another team member replying mid-run** is queued. The bot reacts with ⏳ and starts their turn once the current run finishes.
+- **Another member replying mid-run** is queued. The bot reacts with ⏳ and starts their turn once the current run finishes.
 - **Approvals.** Moderation, messages to other channels, HTTP requests other than GET and HEAD, and MCP tools listed under `approve` post an Approve / Approve for this run / Deny prompt, deleted once it is answered. Only the person who started the run can answer it. "Approve for this run" covers the same command against the same target, such as every `PATCH` to one host.
 
 ### Commands
@@ -55,7 +55,7 @@ Bridge commands run in the bot with the permissions of the person who asked:
 |---|---|
 | `DISCORD_TOKEN` | Bot token |
 | `DISCORD_GUILD_ID` | Server the slash commands register to |
-| `DISCORD_OWNER_ID`, `DISCORD_TEAM_ROLE_ID` | Who can use the AI |
+| `DISCORD_OWNER_ID`, `DISCORD_TEAM_ROLE_ID`, `DISCORD_AI_ROLE_ID` | Who can use the AI |
 | `DATA_DIR` | SQLite database, sandbox workspaces, cloned repositories |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Any OpenAI-compatible Chat Completions endpoint |
 | `FORGEJO_URL`, `FORGEJO_TOKEN`, `GITHUB_TOKEN` | Forge access; without a token, only public data works |

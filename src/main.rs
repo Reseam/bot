@@ -181,7 +181,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             if let Err(error) = ctx
                 .send(
                     poise::CreateReply::new()
-                        .content("Only the Reseam team can use this.")
+                        .content("You need AI access to use this.")
                         .ephemeral(true),
                 )
                 .await

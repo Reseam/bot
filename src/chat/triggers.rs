@@ -6,7 +6,7 @@ use tokio::sync::OwnedMutexGuard;
 use tracing::{debug, error};
 
 use super::{NewRun, RunRequest, context, run, start_new};
-use crate::access::is_team;
+use crate::access::has_ai_access;
 use crate::{App, conversations};
 
 const QUEUED: &str = "⏳";
@@ -36,8 +36,8 @@ pub async fn handle_message(
         .as_deref()
         .map(|member| member.roles.as_slice())
         .unwrap_or_default();
-    if !is_team(&app.config, message.author.id, roles) {
-        debug!(user_id = %message.author.id, "ignoring message from non-team member");
+    if !has_ai_access(&app.config, message.author.id, roles) {
+        debug!(user_id = %message.author.id, "ignoring message from member without AI access");
         return Ok(());
     }
 
@@ -181,13 +181,13 @@ pub async fn handle_component(
     let Some(member) = interaction.member.as_ref() else {
         return Ok(());
     };
-    if !is_team(&app.config, interaction.user.id, &member.roles) {
+    if !has_ai_access(&app.config, interaction.user.id, &member.roles) {
         interaction
             .create_response(
                 discord,
                 serenity::CreateInteractionResponse::Message(
                     serenity::CreateInteractionResponseMessage::new()
-                        .content("Only the Reseam team can use this.")
+                        .content("You need AI access to use this.")
                         .ephemeral(true),
                 ),
             )

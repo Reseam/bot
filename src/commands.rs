@@ -22,7 +22,7 @@ pub fn all() -> Vec<Command> {
 #[poise::command(
     slash_command,
     guild_only,
-    check = "crate::access::team_only",
+    check = "crate::access::ai_access",
     subcommands("mcp_status", "mcp_reconnect"),
     subcommand_required
 )]
@@ -115,7 +115,7 @@ pub(super) async fn post_anchor(ctx: Context<'_>, text: String) -> Result<sereni
         .context("failed to fetch command anchor")
 }
 
-#[poise::command(slash_command, guild_only, check = "crate::access::team_only")]
+#[poise::command(slash_command, guild_only, check = "crate::access::ai_access")]
 async fn ask(
     ctx: Context<'_>,
     #[description = "What to ask"] prompt: String,
@@ -157,7 +157,7 @@ async fn ask(
 #[poise::command(
     context_menu_command = "Create issue",
     guild_only,
-    check = "crate::access::team_only"
+    check = "crate::access::ai_access"
 )]
 async fn create_issue(ctx: Context<'_>, message: serenity::Message) -> Result<()> {
     let guild_id = ctx
