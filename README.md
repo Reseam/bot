@@ -87,4 +87,4 @@ cargo run
 
 ## Deployment
 
-Pushing to `main` runs `.forgejo/workflows/image.yml` on the NAS runner. It builds the binary and the sandbox with the toolchain, cargo, and npm caches, packages them as two deterministic layers on `node:24-trixie` with crane (unchanged layers are not uploaded again), pushes `git.reseam.app/reseam/bot:latest` and the commit tag, and calls the Dokploy deploy webhook. Dokploy only pulls and runs the image. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
+Pushing to `main` runs `.forgejo/workflows/release.yml` on the NAS runner. It builds the binary and the sandbox with the toolchain, cargo, and npm caches, uploads them with `config.toml` as `reseam-bot-linux-x64.tar.gz` to the rolling `latest` release, and calls the Dokploy deploy webhook. Dokploy builds the `Dockerfile`, which installs git on `node:24-trixie-slim` and unpacks that release. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
