@@ -59,6 +59,52 @@ pub async fn build(
         context_text.push_str("Referenced message outside recent history:\n");
         context_text.push_str(&format_message(discord, guild_id, referenced));
     }
+    Ok(vec![
+        addressed_message(app, discord, guild_id, invoker, input, context_text).await,
+    ])
+}
+
+pub async fn continue_conversation(
+    app: &App,
+    discord: &serenity::Context,
+    guild_id: serenity::GuildId,
+    channel_id: serenity::ChannelId,
+    invoker: &serenity::Member,
+    last_message_id: serenity::MessageId,
+    input: ContextInput,
+) -> Result<Message> {
+    let mut history = channel_id
+        .messages(
+            discord,
+            serenity::GetMessages::new()
+                .before(input.before)
+                .limit(app.config.agent.history_messages),
+        )
+        .await
+        .context("failed to fetch new channel messages for conversation")?;
+    history.reverse();
+    let new_messages = history
+        .iter()
+        .filter(|message| message.id > last_message_id)
+        .map(|message| format_message(discord, guild_id, message))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let context_text = if new_messages.is_empty() {
+        String::new()
+    } else {
+        format!("NEW MESSAGES SINCE THE LAST REPLY:\n{new_messages}")
+    };
+    Ok(addressed_message(app, discord, guild_id, invoker, input, context_text).await)
+}
+
+async fn addressed_message(
+    app: &App,
+    discord: &serenity::Context,
+    guild_id: serenity::GuildId,
+    invoker: &serenity::Member,
+    input: ContextInput,
+    mut context_text: String,
+) -> Message {
     if !context_text.is_empty() {
         context_text.push_str("\n\n");
     }
@@ -91,9 +137,9 @@ pub async fn build(
         .collect();
     let mut parts = vec![ContentPart::Text { text: context_text }];
     parts.extend(attachment_parts(app, attachments).await);
-    Ok(vec![Message::User {
+    Message::User {
         content: UserContent::from_parts(parts),
-    }])
+    }
 }
 
 async fn attachment_parts(app: &App, attachments: Vec<&serenity::Attachment>) -> Vec<ContentPart> {

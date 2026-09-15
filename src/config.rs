@@ -62,6 +62,9 @@ const fn default_vision() -> bool {
 pub struct AgentConfig {
     pub max_turns: u32,
     pub history_messages: u8,
+    pub conversation_retention_days: u32,
+    pub compaction_reserve_tokens: u64,
+    pub keep_recent_tokens: u64,
 }
 
 impl Default for AgentConfig {
@@ -69,6 +72,9 @@ impl Default for AgentConfig {
         Self {
             max_turns: 40,
             history_messages: 30,
+            conversation_retention_days: 30,
+            compaction_reserve_tokens: 16_384,
+            keep_recent_tokens: 20_000,
         }
     }
 }

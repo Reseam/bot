@@ -10,6 +10,17 @@ use crate::llm::{
 use crate::text::truncate_output;
 use crate::tools::{ImageData, ToolOutput, ToolSet};
 
+mod compaction;
+
+use compaction::{ContextUsage, compact_if_needed};
+
+pub struct CompactionSettings {
+    pub context_window: u64,
+    pub max_output_tokens: u64,
+    pub reserve_tokens: u64,
+    pub keep_recent_tokens: u64,
+}
+
 pub enum AgentEvent {
     TurnStarted,
     Text(String),
@@ -22,6 +33,7 @@ pub enum AgentEvent {
         name: String,
         is_error: bool,
     },
+    Compacted,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -36,6 +48,7 @@ pub struct Agent<'a> {
     pub tools: &'a ToolSet,
     pub system: &'a str,
     pub max_turns: u32,
+    pub compaction: CompactionSettings,
 }
 
 impl Agent<'_> {
@@ -47,10 +60,26 @@ impl Agent<'_> {
         events: &mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<Outcome> {
         let specs = self.tools.specs();
+        let mut latest_usage = None;
         for _ in 0..self.max_turns {
             drain_steering(steering, transcript);
             if cancel.is_cancelled() {
                 return Ok(Outcome::Cancelled);
+            }
+
+            let compacted = compact_if_needed(
+                self.llm,
+                cancel,
+                transcript,
+                latest_usage.as_ref(),
+                &self.compaction,
+            )
+            .await;
+            if compacted.is_err() && cancel.is_cancelled() {
+                return Ok(Outcome::Cancelled);
+            }
+            if compacted? {
+                let _ = events.send(AgentEvent::Compacted);
             }
 
             let _ = events.send(AgentEvent::TurnStarted);
@@ -65,7 +94,7 @@ impl Agent<'_> {
             let Completion {
                 message,
                 finish_reason,
-                usage: _,
+                usage,
             } = match completion {
                 Ok(completion) => completion,
                 Err(_) if cancel.is_cancelled() => return Ok(Outcome::Cancelled),
@@ -73,6 +102,10 @@ impl Agent<'_> {
             };
             let tool_calls = message.tool_calls.clone();
             transcript.push(Message::Assistant(message));
+            latest_usage = usage.map(|usage| ContextUsage {
+                tokens: usage.prompt_tokens + usage.completion_tokens,
+                transcript_len: transcript.len(),
+            });
 
             if tool_calls.is_empty() {
                 if drain_steering(steering, transcript) == 0 {

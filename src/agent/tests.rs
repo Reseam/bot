@@ -89,6 +89,12 @@ async fn run_agent(
         tools,
         system: "system",
         max_turns,
+        compaction: CompactionSettings {
+            context_window: u64::MAX,
+            max_output_tokens: 0,
+            reserve_tokens: 0,
+            keep_recent_tokens: 20_000,
+        },
     }
     .run(&CancellationToken::new(), transcript, steering, &events)
     .await
@@ -240,6 +246,12 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         tools: &tools,
         system: "system",
         max_turns: 2,
+        compaction: CompactionSettings {
+            context_window: u64::MAX,
+            max_output_tokens: 0,
+            reserve_tokens: 0,
+            keep_recent_tokens: 20_000,
+        },
     };
     let outcome = {
         let run = agent.run(&cancel, &mut transcript, &mut steering, &events);

@@ -4,6 +4,8 @@ mod attachments;
 mod chat;
 mod commands;
 mod config;
+mod conversations;
+mod db;
 mod llm;
 #[cfg(test)]
 mod test_support;
@@ -26,6 +28,7 @@ pub type Data = Arc<App>;
 
 pub struct App {
     pub config: Config,
+    pub db: sqlx::SqlitePool,
     pub llm: Llm,
     pub http: reqwest::Client,
     pub runs: Runs,
@@ -44,6 +47,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let config = Config::load()?;
+    let db = db::open(&config.data_dir).await?;
+    conversations::spawn_pruning(db.clone(), config.agent.conversation_retention_days);
     let token = config.discord.token.clone();
     let guild_id = config.discord.guild_id;
     let llm = Llm::new(config.llm.clone())?;
@@ -54,6 +59,7 @@ async fn main() -> Result<()> {
         .context("failed to build attachment HTTP client")?;
     let app = Arc::new(App {
         config,
+        db,
         llm,
         http,
         runs: Runs::default(),

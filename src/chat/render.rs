@@ -23,6 +23,7 @@ pub struct Renderer {
     rendered: Vec<String>,
     last_edit: Instant,
     separate_next_text: bool,
+    compacted: bool,
 }
 
 impl Renderer {
@@ -56,6 +57,7 @@ impl Renderer {
             rendered: vec!["-# Thinking…".to_owned()],
             last_edit: Instant::now(),
             separate_next_text: false,
+            compacted: false,
         })
     }
 
@@ -67,6 +69,7 @@ impl Renderer {
         match event {
             AgentEvent::TurnStarted => self.separate_next_text = !self.answer.is_empty(),
             AgentEvent::Text(text) => {
+                self.compacted = false;
                 if self.separate_next_text {
                     self.answer.push_str("\n\n");
                     self.separate_next_text = false;
@@ -80,6 +83,7 @@ impl Renderer {
                 self.running.retain(|(running_id, _)| running_id != &id);
                 self.used.push((name, is_error));
             }
+            AgentEvent::Compacted => self.compacted = true,
         }
     }
 
@@ -90,7 +94,7 @@ impl Renderer {
         if self.last_edit.elapsed() < EDIT_INTERVAL {
             return Ok(Vec::new());
         }
-        let footer = if self.running.is_empty() {
+        let mut footer = if self.running.is_empty() {
             "-# Thinking…".to_owned()
         } else {
             format!(
@@ -102,6 +106,9 @@ impl Renderer {
                     .join(", ")
             )
         };
+        if self.compacted {
+            footer.push_str("\n-# Compacted earlier context");
+        }
         self.update(discord, &footer, true).await
     }
 
