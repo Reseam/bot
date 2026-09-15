@@ -356,6 +356,8 @@ pub struct CommandRequest {
     pub invoker: serenity::Member,
     pub prompt: String,
     pub attachment: Option<serenity::Attachment>,
+    pub history_before: Option<serenity::MessageId>,
+    pub referenced: Option<Box<serenity::Message>>,
 }
 
 pub async fn build_command_request(
@@ -370,13 +372,13 @@ pub async fn build_command_request(
         request.channel_id,
         &request.invoker,
         context::ContextInput {
-            before: request.response.id,
+            before: request.history_before.unwrap_or(request.response.id),
             addressed_id: request.response.id,
             timestamp: request.response.timestamp,
             content: request.prompt,
             mentions: Vec::new(),
             attachments: request.attachment.into_iter().collect(),
-            referenced: None,
+            referenced: request.referenced,
         },
     )
     .await?;

@@ -11,6 +11,8 @@ use crate::llm::{ContentPart, ImageUrl, Message, UserContent};
 use crate::text::truncate_chars;
 
 const EMBED_DESCRIPTION_LIMIT: usize = 300;
+const EMBED_FIELD_LIMIT: usize = 200;
+const EMBED_FIELD_COUNT: usize = 10;
 static CHANNEL_MENTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<#([0-9]+)>").expect("the channel mention pattern is valid"));
 static ROLE_MENTION: LazyLock<Regex> =
@@ -238,7 +240,46 @@ pub(crate) fn format_message(
             embed.description.as_deref().unwrap_or(""),
             EMBED_DESCRIPTION_LIMIT,
         );
-        output.push_str(&format!("\n[embed: {title} | {description}]"));
+        let author = embed
+            .author
+            .as_ref()
+            .map_or_else(String::new, |author| format!(" | by {}", author.name));
+        let url = embed
+            .url
+            .as_deref()
+            .map_or_else(String::new, |url| format!(" | {url}"));
+        output.push_str(&format!("\n[embed: {title}{author}{url} | {description}]"));
+        for field in embed.fields.iter().take(EMBED_FIELD_COUNT) {
+            output.push_str(&format!(
+                "\n[embed field: {}: {}]",
+                field.name,
+                truncate_chars(&field.value, EMBED_FIELD_LIMIT)
+            ));
+        }
+        if let Some(footer) = &embed.footer {
+            output.push_str(&format!("\n[embed footer: {}]", footer.text));
+        }
+        if embed.image.is_some() {
+            output.push_str("\n[embed image]");
+        }
+        if embed.thumbnail.is_some() {
+            output.push_str("\n[embed thumbnail]");
+        }
+    }
+    for sticker in &message.sticker_items {
+        output.push_str(&format!("\n[sticker: {}]", sticker.name));
+    }
+    if let Some(poll) = &message.poll {
+        output.push_str(&format!(
+            "\n[poll: {}]",
+            poll.question.text.as_deref().unwrap_or("untitled")
+        ));
+        for answer in &poll.answers {
+            output.push_str(&format!(
+                "\n[poll answer: {}]",
+                answer.poll_media.text.as_deref().unwrap_or("untitled")
+            ));
+        }
     }
     output
 }

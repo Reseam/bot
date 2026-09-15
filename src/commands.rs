@@ -5,11 +5,30 @@ use crate::chat;
 use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
 use crate::{Data, Error};
 
+mod summarize;
+
 type Command = poise::Command<Data, Error>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 pub fn all() -> Vec<Command> {
-    vec![ask()]
+    let mut commands = vec![ask()];
+    commands.extend(summarize::commands());
+    commands
+}
+
+pub(super) async fn post_anchor(ctx: Context<'_>, text: String) -> Result<serenity::Message> {
+    let reply = ctx
+        .send(
+            poise::CreateReply::new()
+                .content(truncate_chars(&text, DISCORD_MESSAGE_LIMIT))
+                .allowed_mentions(serenity::CreateAllowedMentions::new()),
+        )
+        .await
+        .context("failed to post command anchor")?;
+    reply
+        .into_message()
+        .await
+        .context("failed to fetch command anchor")
 }
 
 #[poise::command(slash_command, guild_only, check = "crate::access::team_only")]
@@ -24,21 +43,11 @@ async fn ask(
         .await
         .context("failed to fetch command member")?
         .into_owned();
-    let heading = format!("**{} asked:** ", member.display_name());
-    let available = DISCORD_MESSAGE_LIMIT.saturating_sub(heading.chars().count());
-    let visible_prompt = truncate_chars(&prompt, available);
-    let reply = ctx
-        .send(
-            poise::CreateReply::new()
-                .content(format!("{heading}{visible_prompt}"))
-                .allowed_mentions(serenity::CreateAllowedMentions::new()),
-        )
-        .await
-        .context("failed to post ask prompt")?;
-    let response = reply
-        .into_message()
-        .await
-        .context("failed to fetch ask response")?;
+    let response = post_anchor(
+        ctx,
+        format!("**{} asked:** {prompt}", member.display_name()),
+    )
+    .await?;
     let app = ctx.data().clone();
     let request = chat::build_command_request(
         &app,
@@ -50,6 +59,8 @@ async fn ask(
             invoker: member,
             prompt,
             attachment: file,
+            history_before: None,
+            referenced: None,
         },
     )
     .await?;

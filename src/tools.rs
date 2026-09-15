@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::chat::Run;
 use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 
-mod discord;
+pub(crate) mod discord;
 
 #[derive(Clone, Copy, JsonSchema, Deserialize)]
 #[serde(try_from = "String")]

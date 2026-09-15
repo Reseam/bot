@@ -17,7 +17,6 @@ const APPROVE_RUN: &str = "approval:run";
 const DENY: &str = "approval:deny";
 
 impl Run {
-    #[expect(dead_code, reason = "used by moderation, forge, and shell tools")]
     pub async fn approve(&self, tool: &str, action: &str) -> Result<bool> {
         if self
             .grants
