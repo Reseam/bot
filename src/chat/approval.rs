@@ -16,9 +16,19 @@ const APPROVE_RUN: &str = "approval:run";
 const DENY: &str = "approval:deny";
 
 impl Run {
+    pub fn take_approval_notices(&self) -> Vec<String> {
+        std::mem::take(&mut *self.approval_notices.lock())
+    }
+
     pub async fn approve(&self, scope: &str, action: &str) -> Result<()> {
         if self.grants.lock().contains(scope) {
             return Ok(());
+        }
+        if self.denials.lock().contains(scope) {
+            self.approval_notices.lock().push(format!(
+                "[bot] Not done: the invoker already denied {scope} in this run. Do not try it again."
+            ));
+            bail!("the invoker already denied {scope} in this run; do not try it again");
         }
 
         let buttons = vec![serenity::CreateActionRow::Buttons(vec![
@@ -107,8 +117,19 @@ impl Run {
         }
         match decision {
             Decision::Approved | Decision::ApprovedForRun => Ok(()),
-            Decision::Denied => bail!("the invoker denied this action; do not try it again"),
-            Decision::TimedOut => bail!("the approval request timed out"),
+            Decision::Denied => {
+                self.denials.lock().insert(scope.to_owned());
+                self.approval_notices.lock().push(format!(
+                    "[bot] The invoker denied {scope}. Do not retry it or work around it."
+                ));
+                bail!("the invoker denied this action; do not try it again")
+            }
+            Decision::TimedOut => {
+                self.approval_notices
+                    .lock()
+                    .push(format!("[bot] The approval request for {scope} timed out."));
+                bail!("the approval request timed out")
+            }
             Decision::Cancelled => bail!("the run was cancelled"),
         }
     }

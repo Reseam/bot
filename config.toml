@@ -16,7 +16,6 @@ model = "${LLM_MODEL}"
 context_window = 1048576
 max_output_tokens = 16000
 vision = true
-extra_body = { provider = { ignore = ["Alibaba"] } }
 
 [agent]
 max_turns = 100

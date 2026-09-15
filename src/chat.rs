@@ -50,6 +50,8 @@ pub struct Run {
     pub cancel: CancellationToken,
     steering: mpsc::UnboundedSender<Message>,
     grants: Mutex<HashSet<String>>,
+    denials: Mutex<HashSet<String>>,
+    approval_notices: Mutex<Vec<String>>,
     message_ids: Mutex<HashSet<serenity::MessageId>>,
 }
 
@@ -152,6 +154,8 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
         cancel: CancellationToken::new(),
         steering,
         grants: Mutex::default(),
+        denials: Mutex::default(),
+        approval_notices: Mutex::default(),
         message_ids: Mutex::default(),
     });
     app.runs.start(&run);

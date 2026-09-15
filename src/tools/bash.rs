@@ -57,10 +57,18 @@ async fn bash(run: Arc<Run>, arguments: Arguments) -> Result<ToolOutput> {
     if !(1..=MAX_TIMEOUT_SECS).contains(&timeout) {
         bail!("timeout_secs must be between 1 and {MAX_TIMEOUT_SECS}");
     }
-    let execution = run
+    let output = run
         .app
         .sandbox
         .exec(&run, &arguments.command, Duration::from_secs(timeout))
-        .await?;
-    Ok(execution.into_output())
+        .await?
+        .into_output();
+    let notices = run.take_approval_notices();
+    if notices.is_empty() {
+        return Ok(output);
+    }
+    Ok(ToolOutput {
+        text: format!("{}\n{}", notices.join("\n"), output.text),
+        images: output.images,
+    })
 }
