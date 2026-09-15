@@ -225,7 +225,7 @@ pub async fn unban(
     .await
 }
 
-fn validate_target(
+pub(crate) fn validate_target(
     moderator: &Moderator<'_>,
     target: &serenity::Member,
     required: serenity::Permissions,
@@ -294,7 +294,7 @@ fn require_actor_permission(
     Ok(())
 }
 
-pub(super) fn require_actor_channel_permission(
+pub(crate) fn require_actor_channel_permission(
     moderator: &Moderator<'_>,
     channel_id: serenity::ChannelId,
     required: serenity::Permissions,

@@ -225,10 +225,11 @@ pub(crate) fn format_message(
         reply_to,
     );
     output.push('\n');
+    let authored_by_bot = message.author.id == discord.cache.current_user().id;
     output.push_str(&replace_mentions(
         discord,
         guild_id,
-        &message.content,
+        history_content(&message.content, authored_by_bot),
         &message.mentions,
     ));
     for attachment in &message.attachments {
@@ -287,6 +288,26 @@ pub(crate) fn format_message(
         }
     }
     output
+}
+
+fn history_content(content: &str, authored_by_bot: bool) -> &str {
+    if !authored_by_bot {
+        return content;
+    }
+    let mut retained = content.trim_end_matches(['\r', '\n']);
+    let mut removed = false;
+    loop {
+        let line_start = retained.rfind('\n').map_or(0, |index| index + 1);
+        let line = retained[line_start..]
+            .strip_suffix('\r')
+            .unwrap_or(&retained[line_start..]);
+        if !line.starts_with("-# ") {
+            break;
+        }
+        removed = true;
+        retained = retained[..line_start].trim_end_matches(['\r', '\n']);
+    }
+    if removed { retained } else { content }
 }
 
 fn format_header(
@@ -359,3 +380,6 @@ pub(crate) fn channel_name(
             .map(|channel| channel.name.clone())
     })
 }
+
+#[cfg(test)]
+mod tests;

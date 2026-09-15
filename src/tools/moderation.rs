@@ -69,8 +69,9 @@ struct Warn {
 
 async fn warn(run: Arc<Run>, args: Warn) -> Result<ToolOutput> {
     let target = member(&run, args.user_id).await?;
-    approve_member(&run, "moderation_warn", "Warn", &target, None, &args.reason).await?;
     let moderator = moderator(&run);
+    actions::validate_target(&moderator, &target, serenity::Permissions::MODERATE_MEMBERS)?;
+    approve_member(&run, "moderation_warn", "Warn", &target, None, &args.reason).await?;
     let outcome = actions::warn(&moderator, &target, &args.reason).await?;
     Ok(outcome_text("Warned", target.user.id, &outcome))
 }
@@ -89,6 +90,8 @@ async fn timeout(run: Arc<Run>, args: Timeout) -> Result<ToolOutput> {
         bail!("duration must not exceed 28 days");
     }
     let target = member(&run, args.user_id).await?;
+    let moderator = moderator(&run);
+    actions::validate_target(&moderator, &target, serenity::Permissions::MODERATE_MEMBERS)?;
     approve_member(
         &run,
         "moderation_timeout",
@@ -98,7 +101,6 @@ async fn timeout(run: Arc<Run>, args: Timeout) -> Result<ToolOutput> {
         &args.reason,
     )
     .await?;
-    let moderator = moderator(&run);
     let outcome = actions::timeout(&moderator, &target, duration, &args.reason).await?;
     Ok(outcome_text("Timed out", target.user.id, &outcome))
 }
@@ -112,8 +114,9 @@ struct MemberAction {
 
 async fn kick(run: Arc<Run>, args: MemberAction) -> Result<ToolOutput> {
     let target = member(&run, args.user_id).await?;
-    approve_member(&run, "moderation_kick", "Kick", &target, None, &args.reason).await?;
     let moderator = moderator(&run);
+    actions::validate_target(&moderator, &target, serenity::Permissions::KICK_MEMBERS)?;
+    approve_member(&run, "moderation_kick", "Kick", &target, None, &args.reason).await?;
     let outcome = actions::kick(&moderator, &target, &args.reason).await?;
     Ok(outcome_text("Kicked", target.user.id, &outcome))
 }
@@ -137,6 +140,8 @@ async fn ban(run: Arc<Run>, args: Ban) -> Result<ToolOutput> {
         bail!("delete_message_days must be between 0 and 7");
     }
     let target = member(&run, args.user_id).await?;
+    let moderator = moderator(&run);
+    actions::validate_target(&moderator, &target, serenity::Permissions::BAN_MEMBERS)?;
     approve_member(
         &run,
         "moderation_ban",
@@ -146,7 +151,6 @@ async fn ban(run: Arc<Run>, args: Ban) -> Result<ToolOutput> {
         &args.reason,
     )
     .await?;
-    let moderator = moderator(&run);
     let outcome = actions::ban(&moderator, &target, &args.reason, duration, delete_days).await?;
     Ok(outcome_text("Banned", target.user.id, &outcome))
 }
@@ -162,6 +166,12 @@ struct DeleteMessage {
 async fn delete_message(run: Arc<Run>, args: DeleteMessage) -> Result<ToolOutput> {
     let channel = serenity::ChannelId::new(args.channel_id.get());
     let message = serenity::MessageId::new(args.message_id.get());
+    let moderator = moderator(&run);
+    actions::require_actor_channel_permission(
+        &moderator,
+        channel,
+        serenity::Permissions::MANAGE_MESSAGES,
+    )?;
     run.approve(
         "moderation_delete_message",
         &format!(
@@ -170,7 +180,6 @@ async fn delete_message(run: Arc<Run>, args: DeleteMessage) -> Result<ToolOutput
         ),
     )
     .await?;
-    let moderator = moderator(&run);
     let outcome = actions::delete_message(&moderator, channel, message, &args.reason).await?;
     Ok(ToolOutput::text(format!(
         "Deleted message {message}. Case #{}.",
@@ -196,6 +205,12 @@ async fn purge(run: Arc<Run>, args: Purge) -> Result<ToolOutput> {
         .channel_id
         .map_or(run.channel_id, |id| serenity::ChannelId::new(id.get()));
     let target = args.user_id.map(|id| serenity::UserId::new(id.get()));
+    let moderator = moderator(&run);
+    actions::require_actor_channel_permission(
+        &moderator,
+        channel,
+        serenity::Permissions::MANAGE_MESSAGES,
+    )?;
     run.approve(
         "moderation_purge",
         &format!(
@@ -209,7 +224,6 @@ async fn purge(run: Arc<Run>, args: Purge) -> Result<ToolOutput> {
         ),
     )
     .await?;
-    let moderator = moderator(&run);
     let deleted = actions::purge_messages(
         &moderator,
         channel,
