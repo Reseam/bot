@@ -148,11 +148,6 @@ impl Renderer {
 
         let mut added = Vec::new();
         while self.messages.len() < chunks.len() {
-            let previous = self
-                .messages
-                .last()
-                .map(|message| message.id)
-                .context("renderer has no message to continue from")?;
             if let Some(message) = self.messages.last_mut() {
                 message
                     .edit(discord, serenity::EditMessage::new().components(Vec::new()))
@@ -165,7 +160,6 @@ impl Renderer {
                     discord,
                     serenity::CreateMessage::new()
                         .content("-# Thinking…")
-                        .reference_message((self.messages[0].channel_id, previous))
                         .allowed_mentions(serenity::CreateAllowedMentions::new()),
                 )
                 .await
