@@ -28,6 +28,30 @@ pub struct Config {
     pub forges: BTreeMap<String, ForgeConfig>,
     #[serde(default)]
     pub shell: ShellConfig,
+    #[serde(default)]
+    pub mcp: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerConfig {
+    pub url: Option<String>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    pub tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub approve: Vec<String>,
+    #[serde(default = "default_mcp_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+const fn default_mcp_timeout_secs() -> u64 {
+    60
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -137,7 +161,22 @@ impl Config {
         if !(1..=600).contains(&config.shell.timeout_secs) {
             bail!("shell.timeout_secs must be between 1 and 600")
         }
+        for (name, server) in &config.mcp {
+            server.validate(name)?;
+        }
         Ok(config)
+    }
+}
+
+impl McpServerConfig {
+    fn validate(&self, name: &str) -> Result<()> {
+        if self.url.is_some() == self.command.is_some() {
+            bail!("mcp.{name} must set exactly one of url or command")
+        }
+        if self.timeout_secs == 0 {
+            bail!("mcp.{name}.timeout_secs must be greater than zero")
+        }
+        Ok(())
     }
 }
 
@@ -255,5 +294,44 @@ mod tests {
         assert_eq!(table["empty"].as_str(), Some("fallback"));
         assert_eq!(table["empty_default"].as_str(), Some(""));
         Ok(())
+    }
+
+    fn mcp_config(url: Option<&str>, command: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            url: url.map(str::to_owned),
+            command: command.map(str::to_owned),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            tools: None,
+            approve: Vec::new(),
+            timeout_secs: default_mcp_timeout_secs(),
+        }
+    }
+
+    #[test]
+    fn mcp_server_requires_exactly_one_transport() {
+        assert!(
+            mcp_config(Some("https://example.com/mcp"), None)
+                .validate("valid")
+                .is_ok()
+        );
+        assert!(mcp_config(None, Some("server")).validate("valid").is_ok());
+
+        let neither = mcp_config(None, None)
+            .validate("missing")
+            .expect_err("missing transport should fail");
+        assert_eq!(
+            neither.to_string(),
+            "mcp.missing must set exactly one of url or command"
+        );
+
+        let both = mcp_config(Some("https://example.com/mcp"), Some("server"))
+            .validate("ambiguous")
+            .expect_err("multiple transports should fail");
+        assert_eq!(
+            both.to_string(),
+            "mcp.ambiguous must set exactly one of url or command"
+        );
     }
 }

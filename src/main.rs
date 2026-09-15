@@ -8,6 +8,7 @@ mod conversations;
 mod db;
 mod forge;
 mod llm;
+mod mcp;
 #[cfg(test)]
 mod test_support;
 mod text;
@@ -36,6 +37,7 @@ pub struct App {
     pub runs: Runs,
     pub forges: std::collections::BTreeMap<String, forge::Forge>,
     pub repo_locks: RepoLocks,
+    pub mcp: mcp::Mcp,
 }
 
 #[tokio::main]
@@ -56,6 +58,7 @@ async fn main() -> Result<()> {
     let token = config.discord.token.clone();
     let guild_id = config.discord.guild_id;
     let llm = Llm::new(config.llm.clone())?;
+    let mcp = mcp::Mcp::connect(&config.mcp).await;
     let forges = config
         .forges
         .iter()
@@ -74,6 +77,7 @@ async fn main() -> Result<()> {
         runs: Runs::default(),
         forges,
         repo_locks: RepoLocks::default(),
+        mcp,
     });
     info!(data_dir = %app.config.data_dir.display(), "configuration loaded");
 
@@ -84,6 +88,8 @@ async fn main() -> Result<()> {
             event_handler: |framework, event| Box::pin(chat::event_handler(framework, event)),
             on_error: |error| Box::pin(on_error(error)),
             allowed_mentions: Some(serenity::CreateAllowedMentions::new()),
+            owners: app.config.access.owner_ids.iter().copied().collect(),
+            initialize_owners: false,
             prefix_options: poise::PrefixFrameworkOptions {
                 mention_as_prefix: false,
                 ..Default::default()
@@ -111,17 +117,24 @@ async fn main() -> Result<()> {
         .context("failed to build Discord client")?;
     let shard_manager = client.shard_manager.clone();
 
-    tokio::select! {
-        result = client.start() => result.context("Discord client stopped with an error")?,
+    let discord_result = tokio::select! {
+        result = client.start() => result.context("Discord client stopped with an error"),
         result = shutdown_signal() => {
-            result?;
-            info!("shutdown signal received");
-            app.runs.cancel_all();
-            shard_manager.shutdown_all().await;
-            info!("Discord shards shut down");
+            match result {
+                Ok(()) => {
+                    info!("shutdown signal received");
+                    app.runs.cancel_all();
+                    shard_manager.shutdown_all().await;
+                    info!("Discord shards shut down");
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
         }
-    }
-    Ok(())
+    };
+    app.mcp.shutdown().await;
+    info!("MCP clients shut down");
+    discord_result
 }
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {

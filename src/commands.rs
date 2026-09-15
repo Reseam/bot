@@ -12,9 +12,90 @@ type Command = poise::Command<Data, Error>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 pub fn all() -> Vec<Command> {
-    let mut commands = vec![ask(), create_issue()];
+    let mut commands = vec![ask(), create_issue(), mcp()];
     commands.extend(summarize::commands());
     commands
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    check = "crate::access::team_only",
+    subcommands("mcp_status", "mcp_reconnect"),
+    subcommand_required
+)]
+async fn mcp(_ctx: Context<'_>) -> Result<()> {
+    Ok(())
+}
+
+#[poise::command(slash_command, ephemeral, rename = "status")]
+async fn mcp_status(ctx: Context<'_>) -> Result<()> {
+    let statuses = ctx.data().mcp.status();
+    let text = if statuses.is_empty() {
+        "No MCP servers are configured.".to_owned()
+    } else {
+        statuses
+            .into_iter()
+            .map(|status| {
+                let state = status.error.map_or_else(
+                    || "connected".to_owned(),
+                    |error| format!("unavailable: {}", error.replace('\n', " ")),
+                );
+                let tools = if status.tools.is_empty() {
+                    "none".to_owned()
+                } else {
+                    status.tools.join(", ")
+                };
+                format!(
+                    "**{}**: {state} ({})\nTools: {tools}",
+                    status.name, status.transport
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+    ctx.send(
+        poise::CreateReply::new()
+            .content(truncate_chars(&text, DISCORD_MESSAGE_LIMIT))
+            .ephemeral(true),
+    )
+    .await
+    .context("failed to send MCP status")?;
+    Ok(())
+}
+
+#[poise::command(slash_command, ephemeral, owners_only, rename = "reconnect")]
+async fn mcp_reconnect(
+    ctx: Context<'_>,
+    #[description = "Server to reconnect"]
+    #[autocomplete = "autocomplete_mcp_server"]
+    server: String,
+) -> Result<()> {
+    let text = match ctx.data().mcp.reconnect(&server).await {
+        Ok(()) => format!("Reconnected `{server}`."),
+        Err(error) => format!("Could not reconnect `{server}`: {error}"),
+    };
+    ctx.send(poise::CreateReply::new().content(text).ephemeral(true))
+        .await
+        .context("failed to send MCP reconnect result")?;
+    Ok(())
+}
+
+async fn autocomplete_mcp_server(
+    ctx: Context<'_>,
+    partial: &str,
+) -> serenity::CreateAutocompleteResponse {
+    let partial = partial.to_ascii_lowercase();
+    let choices = ctx
+        .data()
+        .mcp
+        .status()
+        .into_iter()
+        .filter(|status| status.name.to_ascii_lowercase().starts_with(&partial))
+        .take(25)
+        .map(|status| serenity::AutocompleteChoice::from(status.name))
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
 pub(super) async fn post_anchor(ctx: Context<'_>, text: String) -> Result<serenity::Message> {

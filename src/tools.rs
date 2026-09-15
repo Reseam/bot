@@ -13,6 +13,7 @@ use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 
 pub(crate) mod discord;
 mod forge;
+mod mcp;
 pub(crate) mod repo;
 mod shell;
 
@@ -182,6 +183,7 @@ pub fn for_run(run: &Arc<Run>) -> ToolSet {
     if run.app.config.shell.enabled {
         tools.extend(shell::tools(run));
     }
+    tools.extend(mcp::tools(run));
     ToolSet::new(tools)
 }
 

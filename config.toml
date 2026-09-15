@@ -34,3 +34,8 @@ token = "${GITHUB_TOKEN:-}"
 [shell]
 enabled = true
 timeout_secs = 120
+
+[mcp.exa]
+url = "https://mcp.exa.ai/mcp"
+headers = { "x-api-key" = "${EXA_API_KEY}" }
+tools = ["web_search_exa", "web_fetch_exa"]
