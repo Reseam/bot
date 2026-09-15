@@ -2,6 +2,8 @@
 
 Discord bot for the Reseam team with a built-in AI agent, plus moderation commands.
 
+New to the bot? Read [GUIDE.md](GUIDE.md) for a walkthrough of what it does and how to use it.
+
 ## Using it
 
 Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full agent. Member roles (`access.member_role_ids`) get a sandbox limited to `discord`, `view`, and text tools: no web, MCP, repositories, forge APIs, python3, or js-exec, and no Create issue or `/mcp`. Moderation commands use normal Discord permissions instead.
