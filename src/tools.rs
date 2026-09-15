@@ -5,17 +5,40 @@ use anyhow::{Result, anyhow};
 use base64::Engine;
 use futures::future::BoxFuture;
 use schemars::{JsonSchema, generate::SchemaSettings};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
+use crate::chat::Run;
 use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 
-const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-const MAX_OUTPUT_LINES: usize = 2_000;
+mod discord;
 
-type ToolHandler =
-    dyn Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync;
+#[derive(Clone, Copy, JsonSchema, Deserialize)]
+#[serde(try_from = "String")]
+pub(crate) struct Snowflake(#[schemars(with = "String")] u64);
+
+impl Snowflake {
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<String> for Snowflake {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value
+            .parse::<u64>()
+            .map_err(|_| "Discord ID must be an unsigned integer string".to_owned())
+            .and_then(|id| {
+                (id != 0)
+                    .then_some(Self(id))
+                    .ok_or_else(|| "Discord ID must not be zero".to_owned())
+            })
+    }
+}
+
+type ToolHandler = dyn Fn(Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync;
 
 pub struct Tool {
     pub name: String,
@@ -25,14 +48,16 @@ pub struct Tool {
 }
 
 impl Tool {
-    pub fn new<A, F, Fut>(
+    pub fn new<A, S, F, Fut>(
         name: impl Into<String>,
         description: impl Into<String>,
+        state: S,
         handler: F,
     ) -> Self
     where
         A: DeserializeOwned + JsonSchema + Send + 'static,
-        F: Fn(ToolContext, A) -> Fut + Send + Sync + 'static,
+        S: Clone + Send + Sync + 'static,
+        F: Fn(S, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolOutput>> + Send + 'static,
     {
         let settings = SchemaSettings::draft2020_12().with(|settings| {
@@ -46,39 +71,42 @@ impl Tool {
             object.remove("title");
             object.remove("$defs");
         }
-        Self::raw(name, description, parameters, move |ctx, arguments| {
-            let parsed = serde_json::from_value(arguments)
-                .map_err(|error| anyhow!("invalid tool arguments: {error}"))
-                .map(|arguments| handler(ctx, arguments));
-            Box::pin(async move { parsed?.await })
-        })
+        Self::raw(
+            name,
+            description,
+            parameters,
+            state,
+            move |state, arguments| {
+                let parsed = serde_json::from_value(arguments)
+                    .map_err(|error| anyhow!("invalid tool arguments: {error}"))
+                    .map(|arguments| handler(state, arguments));
+                Box::pin(async move { parsed?.await })
+            },
+        )
     }
 
-    pub fn raw<F>(
+    pub fn raw<S, F>(
         name: impl Into<String>,
         description: impl Into<String>,
         parameters: Value,
+        state: S,
         handler: F,
     ) -> Self
     where
-        F: Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync + 'static,
+        S: Clone + Send + Sync + 'static,
+        F: Fn(S, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync + 'static,
     {
         Self {
             name: name.into(),
             description: description.into(),
             parameters,
-            handler: Arc::new(handler),
+            handler: Arc::new(move |arguments| handler(state.clone(), arguments)),
         }
     }
 
-    pub async fn execute(&self, ctx: ToolContext, arguments: Value) -> Result<ToolOutput> {
-        (self.handler)(ctx, arguments).await
+    pub async fn execute(&self, arguments: Value) -> Result<ToolOutput> {
+        (self.handler)(arguments).await
     }
-}
-
-#[derive(Clone)]
-pub struct ToolContext {
-    pub cancel: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -144,26 +172,8 @@ impl ToolSet {
     }
 }
 
-pub fn truncate_output(text: &str) -> String {
-    let line_boundary = text
-        .match_indices('\n')
-        .nth(MAX_OUTPUT_LINES - 1)
-        .map_or(text.len(), |(index, _)| index + 1);
-    let mut boundary = text.len().min(MAX_OUTPUT_BYTES).min(line_boundary);
-    while !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    if boundary == text.len() {
-        return text.to_owned();
-    }
-
-    let omitted = &text[boundary..];
-    let omitted_lines = omitted.lines().count();
-    format!(
-        "{}\n[truncated: omitted {omitted_lines} lines, {} bytes]",
-        &text[..boundary],
-        omitted.len()
-    )
+pub fn for_run(run: &Arc<Run>) -> ToolSet {
+    ToolSet::new(discord::tools(run))
 }
 
 #[cfg(test)]
@@ -180,9 +190,10 @@ mod tests {
 
     #[test]
     fn typed_schema_is_inline_and_stripped() {
-        let tool = Tool::new::<Arguments, _, _>("echo", "Echo", |_ctx, arguments| async move {
-            Ok(ToolOutput::text(arguments.value))
-        });
+        let tool =
+            Tool::new::<Arguments, _, _, _>("echo", "Echo", (), |_state, arguments| async move {
+                Ok(ToolOutput::text(arguments.value))
+            });
         assert!(tool.parameters.get("$schema").is_none());
         assert!(tool.parameters.get("title").is_none());
         assert!(tool.parameters.get("$defs").is_none());
@@ -191,41 +202,14 @@ mod tests {
 
     #[tokio::test]
     async fn typed_tool_reports_bad_arguments() {
-        let tool = Tool::new::<Arguments, _, _>("echo", "Echo", |_ctx, arguments| async move {
-            Ok(ToolOutput::text(arguments.value))
-        });
+        let tool =
+            Tool::new::<Arguments, _, _, _>("echo", "Echo", (), |_state, arguments| async move {
+                Ok(ToolOutput::text(arguments.value))
+            });
         let error = tool
-            .execute(
-                ToolContext {
-                    cancel: CancellationToken::new(),
-                },
-                json!({"wrong": true}),
-            )
+            .execute(json!({"wrong": true}))
             .await
             .expect_err("invalid arguments should fail");
         assert!(error.to_string().contains("missing field `value`"));
-    }
-
-    #[test]
-    fn truncates_at_byte_limit_on_utf8_boundary() {
-        let text = format!("{}éafter", "a".repeat(MAX_OUTPUT_BYTES - 1));
-        let output = truncate_output(&text);
-        assert!(output.contains("[truncated: omitted 1 lines, 7 bytes]"));
-        assert!(output.is_char_boundary(output.len()));
-    }
-
-    #[test]
-    fn truncates_at_line_limit() {
-        let text = (0..2_005)
-            .map(|index| format!("{index}\n"))
-            .collect::<String>();
-        let output = truncate_output(&text);
-        assert!(output.contains("[truncated: omitted 5 lines,"));
-        assert_eq!(output.matches('\n').count(), MAX_OUTPUT_LINES + 1);
-    }
-
-    #[test]
-    fn leaves_short_output_unchanged() {
-        assert_eq!(truncate_output("short\noutput"), "short\noutput");
     }
 }

@@ -10,6 +10,7 @@ pub fn llm_config(base_url: String) -> LlmConfig {
         model: "test-model".to_owned(),
         context_window: 128_000,
         max_output_tokens: 16_000,
+        vision: true,
         extra_body: Map::new(),
     }
 }

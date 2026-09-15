@@ -2,14 +2,16 @@ use anyhow::Result;
 use futures::future::join_all;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::llm::{
-    Completion, ContentPart, Delta, FinishReason, ImageUrl, Llm, Message, ToolCall, Usage,
-    UserContent,
+    Completion, ContentPart, Delta, FinishReason, ImageUrl, Llm, Message, ToolCall, UserContent,
 };
-use crate::tools::{ImageData, ToolContext, ToolOutput, ToolSet, truncate_output};
+use crate::text::truncate_output;
+use crate::tools::{ImageData, ToolOutput, ToolSet};
 
 pub enum AgentEvent {
+    TurnStarted,
     Text(String),
     ToolStarted {
         id: String,
@@ -20,7 +22,6 @@ pub enum AgentEvent {
         name: String,
         is_error: bool,
     },
-    Usage(Usage),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -40,7 +41,7 @@ pub struct Agent<'a> {
 impl Agent<'_> {
     pub async fn run(
         &self,
-        ctx: &ToolContext,
+        cancel: &CancellationToken,
         transcript: &mut Vec<Message>,
         steering: &mut mpsc::UnboundedReceiver<Message>,
         events: &mpsc::UnboundedSender<AgentEvent>,
@@ -48,13 +49,14 @@ impl Agent<'_> {
         let specs = self.tools.specs();
         for _ in 0..self.max_turns {
             drain_steering(steering, transcript);
-            if ctx.cancel.is_cancelled() {
+            if cancel.is_cancelled() {
                 return Ok(Outcome::Cancelled);
             }
 
+            let _ = events.send(AgentEvent::TurnStarted);
             let completion = self
                 .llm
-                .complete(self.system, transcript, &specs, &ctx.cancel, |delta| {
+                .complete(self.system, transcript, &specs, cancel, |delta| {
                     if let Delta::Text(text) = delta {
                         let _ = events.send(AgentEvent::Text(text));
                     }
@@ -63,15 +65,12 @@ impl Agent<'_> {
             let Completion {
                 message,
                 finish_reason,
-                usage,
+                usage: _,
             } = match completion {
                 Ok(completion) => completion,
-                Err(_) if ctx.cancel.is_cancelled() => return Ok(Outcome::Cancelled),
+                Err(_) if cancel.is_cancelled() => return Ok(Outcome::Cancelled),
                 Err(error) => return Err(error),
             };
-            if let Some(usage) = usage {
-                let _ = events.send(AgentEvent::Usage(usage));
-            }
             let tool_calls = message.tool_calls.clone();
             transcript.push(Message::Assistant(message));
 
@@ -88,7 +87,7 @@ impl Agent<'_> {
                     "tool call was cut off by the output token limit; re-issue it with complete arguments",
                 )
             } else {
-                match execute_tools(self.tools, ctx, &tool_calls, events).await {
+                match execute_tools(self.tools, cancel, &tool_calls, events).await {
                     Some(results) => results,
                     None => {
                         append_results(
@@ -122,47 +121,40 @@ fn error_results(calls: &[ToolCall], error: &str) -> Vec<ExecutedTool> {
 
 async fn execute_tools(
     tools: &ToolSet,
-    ctx: &ToolContext,
+    cancel: &CancellationToken,
     calls: &[ToolCall],
     events: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Option<Vec<ExecutedTool>> {
-    let futures = calls.iter().map(|call| {
-        let context = ctx.clone();
-        async move {
-            let name = call.function.name.clone();
-            let _ = events.send(AgentEvent::ToolStarted {
-                id: call.id.clone(),
-                name: name.clone(),
-            });
-            let result = execute_tool(tools, context, call).await;
-            let _ = events.send(AgentEvent::ToolFinished {
-                id: call.id.clone(),
-                name,
-                is_error: result.is_err(),
-            });
-            ExecutedTool {
-                call: call.clone(),
-                result,
-            }
+    let futures = calls.iter().map(|call| async move {
+        let name = call.function.name.clone();
+        let _ = events.send(AgentEvent::ToolStarted {
+            id: call.id.clone(),
+            name: name.clone(),
+        });
+        let result = execute_tool(tools, call).await;
+        let _ = events.send(AgentEvent::ToolFinished {
+            id: call.id.clone(),
+            name,
+            is_error: result.is_err(),
+        });
+        ExecutedTool {
+            call: call.clone(),
+            result,
         }
     });
     tokio::select! {
-        () = ctx.cancel.cancelled() => None,
+        () = cancel.cancelled() => None,
         results = join_all(futures) => Some(results),
     }
 }
 
-async fn execute_tool(
-    tools: &ToolSet,
-    ctx: ToolContext,
-    call: &ToolCall,
-) -> Result<ToolOutput, String> {
+async fn execute_tool(tools: &ToolSet, call: &ToolCall) -> Result<ToolOutput, String> {
     let Some(tool) = tools.get(&call.function.name) else {
         return Err(format!("unknown tool `{}`", call.function.name));
     };
     let arguments: Value = serde_json::from_str(&call.function.arguments)
         .map_err(|error| format!("invalid JSON arguments: {error}"))?;
-    tool.execute(ctx, arguments)
+    tool.execute(arguments)
         .await
         .map_err(|error| format!("{error:#}"))
 }

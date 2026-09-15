@@ -14,6 +14,7 @@ api_key = "${LLM_API_KEY}"
 model = "${LLM_MODEL}"
 context_window = 128000
 max_output_tokens = 16000
+vision = true
 
 [agent]
 max_turns = 40

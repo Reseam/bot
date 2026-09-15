@@ -65,19 +65,13 @@ async fn llm_with_responses(responses: Vec<String>) -> Result<(MockServer, Llm)>
     Ok((server, llm))
 }
 
-fn context() -> ToolContext {
-    ToolContext {
-        cancel: CancellationToken::new(),
-    }
-}
-
 #[derive(Deserialize, JsonSchema)]
 struct EchoArgs {
     text: String,
 }
 
 fn echo_tool() -> Tool {
-    Tool::new::<EchoArgs, _, _>("echo", "Echo text", |_ctx, arguments| async move {
+    Tool::new::<EchoArgs, _, _, _>("echo", "Echo text", (), |_state, arguments| async move {
         Ok(ToolOutput::text(arguments.text))
     })
 }
@@ -96,7 +90,7 @@ async fn run_agent(
         system: "system",
         max_turns,
     }
-    .run(&context(), transcript, steering, &events)
+    .run(&CancellationToken::new(), transcript, steering, &events)
     .await
 }
 
@@ -136,13 +130,14 @@ async fn parallel_tools_finish_without_deadlock_and_keep_source_order() -> Resul
     let (_server, llm) =
         llm_with_responses(vec![tool_turn(calls, "tool_calls"), assistant_text("done")]).await?;
     let barrier = Arc::new(Barrier::new(2));
-    let tool = Tool::new::<EchoArgs, _, _>("wait", "Wait together", move |_ctx, arguments| {
-        let barrier = Arc::clone(&barrier);
-        async move {
-            barrier.wait().await;
-            Ok(ToolOutput::text(arguments.text))
-        }
-    });
+    let tool =
+        Tool::new::<EchoArgs, _, _, _>("wait", "Wait together", (), move |_state, arguments| {
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                Ok(ToolOutput::text(arguments.text))
+            }
+        });
     let tools = ToolSet::new(vec![tool]);
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
@@ -201,9 +196,9 @@ async fn length_finish_does_not_execute_tools() -> Result<()> {
     ])
     .await?;
     let calls = Arc::new(AtomicUsize::new(0));
-    let tool = Tool::raw("count", "Count calls", json!({"type":"object"}), {
+    let tool = Tool::raw("count", "Count calls", json!({"type":"object"}), (), {
         let calls = Arc::clone(&calls);
-        move |_ctx, _arguments| {
+        move |_state, _arguments| {
             calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Ok(ToolOutput::text("called")) })
         }
@@ -232,14 +227,14 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         "wait",
         "Wait",
         json!({"type":"object"}),
-        |_ctx, _arguments| Box::pin(std::future::pending()),
+        (),
+        |_state, _arguments| Box::pin(std::future::pending()),
     );
     let tools = ToolSet::new(vec![tool]);
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
     let (events, mut event_receiver) = mpsc::unbounded_channel();
-    let ctx = context();
-    let cancel = ctx.cancel.clone();
+    let cancel = CancellationToken::new();
     let agent = Agent {
         llm: &llm,
         tools: &tools,
@@ -247,7 +242,7 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         max_turns: 2,
     };
     let outcome = {
-        let run = agent.run(&ctx, &mut transcript, &mut steering, &events);
+        let run = agent.run(&cancel, &mut transcript, &mut steering, &events);
         tokio::pin!(run);
 
         loop {
@@ -290,7 +285,8 @@ async fn image_message_names_its_source_tool_call() -> Result<()> {
         "image",
         "Return image",
         json!({"type":"object"}),
-        |_ctx, _arguments| {
+        (),
+        |_state, _arguments| {
             Box::pin(async {
                 Ok(ToolOutput {
                     text: "image attached".to_owned(),
@@ -328,7 +324,8 @@ async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
         "queue",
         "Queue steering",
         json!({"type":"object"}),
-        move |_ctx, _arguments| {
+        (),
+        move |_state, _arguments| {
             let steer = steer.clone();
             Box::pin(async move {
                 let _ = steer.send(user("new direction"));

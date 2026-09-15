@@ -21,6 +21,7 @@ async fn live_openrouter_tool_round_trip() -> Result<()> {
         model: env::var("LLM_MODEL").context("LLM_MODEL is not set")?,
         context_window: 128_000,
         max_output_tokens: 16_000,
+        vision: true,
         extra_body: Map::new(),
     };
     let llm = Llm::new(config)?;

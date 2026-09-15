@@ -47,8 +47,14 @@ pub struct LlmConfig {
     pub model: String,
     pub context_window: u32,
     pub max_output_tokens: u32,
+    #[serde(default = "default_vision")]
+    pub vision: bool,
     #[serde(default)]
     pub extra_body: Map<String, Value>,
+}
+
+const fn default_vision() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
