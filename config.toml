@@ -18,7 +18,6 @@ vision = true
 
 [agent]
 max_turns = 40
-history_messages = 30
 
 [forges.forgejo]
 kind = "forgejo"

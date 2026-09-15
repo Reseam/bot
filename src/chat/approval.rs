@@ -37,13 +37,24 @@ impl Run {
             .send_message(
                 &self.discord,
                 serenity::CreateMessage::new()
-                    .embed(approval_embed(action, scope, None))
+                    .embed(
+                        serenity::CreateEmbed::new()
+                            .title("Approval needed")
+                            .description(truncate_chars(action, EMBED_DESCRIPTION_LIMIT))
+                            .footer(serenity::CreateEmbedFooter::new(format!(
+                                "Approve for this run covers: {scope}"
+                            ))),
+                    )
                     .components(buttons)
                     .allowed_mentions(serenity::CreateAllowedMentions::new()),
             )
             .await
             .context("failed to send approval request")?;
-        let mut pending = PendingApproval::new(self, &message, action, scope);
+        let _message = ApprovalMessage {
+            http: self.discord.http.clone(),
+            channel_id: message.channel_id,
+            message_id: message.id,
+        };
         let collector = serenity::ComponentInteractionCollector::new(&self.discord.shard)
             .message_id(message.id)
             .custom_ids(vec![
@@ -94,8 +105,6 @@ impl Run {
         if decision == Decision::ApprovedForRun {
             self.grants.lock().insert(scope.to_owned());
         }
-        let outcome = decision.label();
-        pending.finish(outcome).await?;
         match decision {
             Decision::Approved | Decision::ApprovedForRun => Ok(()),
             Decision::Denied => bail!("the invoker denied this action; do not try it again"),
@@ -114,111 +123,21 @@ enum Decision {
     Cancelled,
 }
 
-impl Decision {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Approved => "Approved",
-            Self::ApprovedForRun => "Approved for this run",
-            Self::Denied => "Denied by the invoker",
-            Self::TimedOut => "Timed out",
-            Self::Cancelled => "Cancelled",
-        }
-    }
-}
-
-struct PendingApproval {
+struct ApprovalMessage {
     http: Arc<serenity::Http>,
     channel_id: serenity::ChannelId,
     message_id: serenity::MessageId,
-    action: String,
-    scope: String,
-    outcome: &'static str,
-    armed: bool,
 }
 
-impl PendingApproval {
-    fn new(run: &Run, message: &serenity::Message, action: &str, scope: &str) -> Self {
-        Self {
-            http: run.discord.http.clone(),
-            channel_id: message.channel_id,
-            message_id: message.id,
-            action: action.to_owned(),
-            scope: scope.to_owned(),
-            outcome: Decision::Cancelled.label(),
-            armed: true,
-        }
-    }
-
-    async fn finish(&mut self, outcome: &'static str) -> Result<()> {
-        self.outcome = outcome;
-        edit_outcome(
-            &self.http,
-            self.channel_id,
-            self.message_id,
-            &self.action,
-            &self.scope,
-            self.outcome,
-        )
-        .await?;
-        self.armed = false;
-        Ok(())
-    }
-}
-
-impl Drop for PendingApproval {
+impl Drop for ApprovalMessage {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
         let http = self.http.clone();
         let channel_id = self.channel_id;
         let message_id = self.message_id;
-        let action = self.action.clone();
-        let scope = self.scope.clone();
-        let outcome = self.outcome;
         tokio::spawn(async move {
-            if let Err(error) =
-                edit_outcome(&http, channel_id, message_id, &action, &scope, outcome).await
-            {
-                warn!(?error, %message_id, "failed to close abandoned approval");
+            if let Err(error) = channel_id.delete_message(&http, message_id).await {
+                warn!(?error, %message_id, "failed to delete approval request");
             }
         });
     }
-}
-
-async fn edit_outcome(
-    http: &serenity::Http,
-    channel_id: serenity::ChannelId,
-    message_id: serenity::MessageId,
-    action: &str,
-    scope: &str,
-    outcome: &str,
-) -> Result<()> {
-    channel_id
-        .edit_message(
-            http,
-            message_id,
-            serenity::EditMessage::new()
-                .embed(approval_embed(action, scope, Some(outcome)))
-                .components(Vec::new()),
-        )
-        .await
-        .context("failed to update approval request")?;
-    Ok(())
-}
-
-fn approval_embed(action: &str, scope: &str, outcome: Option<&str>) -> serenity::CreateEmbed {
-    let description = outcome.map_or_else(
-        || truncate_chars(action, EMBED_DESCRIPTION_LIMIT),
-        |outcome| {
-            let action_limit = EMBED_DESCRIPTION_LIMIT.saturating_sub(outcome.chars().count() + 2);
-            format!("{}\n\n{outcome}", truncate_chars(action, action_limit))
-        },
-    );
-    serenity::CreateEmbed::new()
-        .title("Approval needed")
-        .description(description)
-        .footer(serenity::CreateEmbedFooter::new(format!(
-            "Approve for this run covers: {scope}"
-        )))
 }

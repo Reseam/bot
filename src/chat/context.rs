@@ -37,20 +37,11 @@ pub async fn build(
     include_history: bool,
     input: ContextInput,
 ) -> Result<Vec<Message>> {
-    let mut history = if include_history {
-        channel_id
-            .messages(
-                discord,
-                serenity::GetMessages::new()
-                    .before(input.before)
-                    .limit(app.config.agent.history_messages),
-            )
-            .await
-            .context("failed to fetch channel history")?
+    let history = if include_history {
+        recent_history(app, discord, channel_id, input.before).await?
     } else {
         Vec::new()
     };
-    history.reverse();
 
     let mut context_text = history
         .iter()
@@ -80,17 +71,8 @@ pub async fn continue_conversation(
     last_message_id: serenity::MessageId,
     input: ContextInput,
 ) -> Result<Message> {
-    let mut history = channel_id
-        .messages(
-            discord,
-            serenity::GetMessages::new()
-                .before(input.before)
-                .limit(app.config.agent.history_messages),
-        )
-        .await
-        .context("failed to fetch new channel messages for conversation")?;
-    history.reverse();
-    let new_messages = history
+    let new_messages = recent_history(app, discord, channel_id, input.before)
+        .await?
         .iter()
         .filter(|message| message.id > last_message_id)
         .map(|message| format_message(discord, guild_id, message))
@@ -102,6 +84,27 @@ pub async fn continue_conversation(
         format!("NEW MESSAGES SINCE THE LAST REPLY:\n{new_messages}")
     };
     Ok(addressed_message(app, discord, guild_id, invoker, input, context_text).await)
+}
+
+async fn recent_history(
+    app: &App,
+    discord: &serenity::Context,
+    channel_id: serenity::ChannelId,
+    before: serenity::MessageId,
+) -> Result<Vec<serenity::Message>> {
+    let limit = app.config.agent.history_messages;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut history = channel_id
+        .messages(
+            discord,
+            serenity::GetMessages::new().before(before).limit(limit),
+        )
+        .await
+        .context("failed to fetch channel history")?;
+    history.reverse();
+    Ok(history)
 }
 
 async fn addressed_message(

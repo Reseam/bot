@@ -122,7 +122,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_turns: 40,
-            history_messages: 30,
+            history_messages: 0,
             conversation_retention_days: 30,
             compact_at_tokens: 500_000,
             compaction_reserve_tokens: 16_384,
@@ -151,6 +151,9 @@ impl Config {
             .with_context(|| format!("invalid configuration in {}", path.display()))?;
         config.data_dir = std::path::absolute(&config.data_dir)
             .context("failed to resolve data_dir to an absolute path")?;
+        if config.agent.history_messages > 100 {
+            bail!("agent.history_messages must be between 0 and 100");
+        }
         for (name, server) in &config.mcp {
             server.validate(name)?;
         }

@@ -6,11 +6,11 @@ Discord bot for the Reseam team with a built-in AI agent, plus moderation comman
 
 Only owners (`access.owner_ids`) and members with a team role (`access.team_role_ids`) can use the AI. Moderation commands use normal Discord permissions instead.
 
-- **Mention the bot** or **reply to one of its messages**. It reads recent channel history, the message you replied to, and any attached images, PDFs, DOCX, or text files, then streams its answer. Press **Stop** to end a run.
+- **Mention the bot** or **reply to one of its messages**. It reads the message you replied to and any attached images, PDFs, DOCX, or text files, then streams its answer. It reads more of the channel on demand, and `agent.history_messages` (0 to 100, default 0) adds that many earlier messages up front. Press **Stop** to end a run.
 - **Reply to its answer** to continue the same conversation. Earlier turns and command output are kept in SQLite. Conversations are summarized once they pass `agent.compact_at_tokens`.
 - **Reply to its message while it is still working** to steer the run. The bot reacts with 👀 when your message is picked up.
 - **Another team member replying mid-run** is queued. The bot reacts with ⏳ and starts their turn once the current run finishes.
-- **Approvals.** Moderation, messages to other channels, HTTP requests other than GET and HEAD, and MCP tools listed under `approve` post an Approve / Approve for this run / Deny prompt. Only the person who started the run can answer it. "Approve for this run" covers the same command against the same target, such as every `PATCH` to one host.
+- **Approvals.** Moderation, messages to other channels, HTTP requests other than GET and HEAD, and MCP tools listed under `approve` post an Approve / Approve for this run / Deny prompt, deleted once it is answered. Only the person who started the run can answer it. "Approve for this run" covers the same command against the same target, such as every `PATCH` to one host.
 
 ### Commands
 
@@ -64,7 +64,7 @@ Bridge commands run in the bot with the permissions of the person who asked:
 Notable settings in `config.toml`:
 
 - `[llm]` `context_window` and `max_output_tokens` must match the model. Set `vision = false` for models without image input. `extra_body` is merged into every request, e.g. `extra_body = { reasoning = { effort = "medium" } }`.
-- `[agent]` `max_turns`, `history_messages`, `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
+- `[agent]` `max_turns`, `history_messages` (0 to 100, default 0), `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
 - `[forges.<name>]` `kind` (`github` or `forgejo`), `url`, `token`, optional `default_repo`.
 - `[mcp.<name>]` either `url` (streamable HTTP, optional `headers`) or `command` with `args` and `env` (stdio). Optional `tools` allowlist, `approve` list, and `timeout_secs`.
 
