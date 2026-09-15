@@ -23,6 +23,8 @@ pub struct Renderer {
     finished: usize,
     failed: usize,
     rendered: Vec<String>,
+    started: Instant,
+    steps: usize,
     last_edit: Instant,
     separate_next_text: bool,
     turn_start: usize,
@@ -59,6 +61,8 @@ impl Renderer {
             finished: 0,
             failed: 0,
             rendered: vec!["-# Thinking…".to_owned()],
+            started: Instant::now(),
+            steps: 0,
             last_edit: Instant::now(),
             separate_next_text: false,
             turn_start: 0,
@@ -73,6 +77,7 @@ impl Renderer {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::TurnStarted => {
+                self.steps += 1;
                 self.separate_next_text = !self.answer.is_empty();
                 self.turn_start = self.answer.len();
             }
@@ -106,11 +111,18 @@ impl Renderer {
         if self.last_edit.elapsed() < EDIT_INTERVAL {
             return Ok(Vec::new());
         }
-        let mut footer = match self.running.len() {
-            0 => "-# Thinking…".to_owned(),
-            1 => "-# Running a command…".to_owned(),
-            count => format!("-# Running {count} commands…"),
+        let status = match self.running.len() {
+            0 => "Thinking…".to_owned(),
+            1 => "Running a command…".to_owned(),
+            count => format!("Running {count} commands…"),
         };
+        let elapsed = self.started.elapsed().as_secs();
+        let elapsed = if elapsed < 60 {
+            format!("{elapsed}s")
+        } else {
+            format!("{} min", elapsed / 60)
+        };
+        let mut footer = format!("-# {status} · step {} · {elapsed}", self.steps.max(1));
         if self.compacted {
             footer.push_str("\n-# Compacted earlier context");
         }
@@ -126,7 +138,7 @@ impl Renderer {
             FinalState::Outcome(Outcome::Finished) if self.finished == 0 => String::new(),
             FinalState::Outcome(Outcome::Finished) => self.commands_footer(),
             FinalState::Outcome(Outcome::Cancelled) => "-# Stopped".to_owned(),
-            FinalState::Outcome(Outcome::TurnLimit) => "-# Reached the turn limit".to_owned(),
+            FinalState::Outcome(Outcome::TurnLimit) => "-# Reached the step limit".to_owned(),
             FinalState::Error(error) => format!("-# Error: {}", short_error(&error)),
         };
         if self.answer.trim().is_empty() && footer.is_empty() {

@@ -65,7 +65,7 @@ Bridge commands run in the bot with the permissions of the person who asked:
 Notable settings in `config.toml`:
 
 - `[llm]` `context_window` and `max_output_tokens` must match the model. Set `vision = false` for models without image input. `extra_body` is merged into every request, e.g. `extra_body = { reasoning = { effort = "medium" } }`.
-- `[agent]` `max_turns`, `history_messages` (0 to 100, default 0), `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
+- `[agent]` `max_turns` (default 100; the last step has no tools and must answer), `history_messages` (0 to 100, default 0), `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
 - `[forges.<name>]` `kind` (`github` or `forgejo`), `url`, `token`, optional `default_repo`.
 - `[mcp.<name>]` either `url` (streamable HTTP, optional `headers`) or `command` with `args` and `env` (stdio). Optional `tools` allowlist, `approve` list, and `timeout_secs`.
 

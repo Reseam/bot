@@ -23,9 +23,15 @@ pub struct Messages {
     /// Channel or thread ID (default: the current channel)
     #[arg(long, value_parser = snowflake)]
     channel: Option<u64>,
-    /// Number of messages (default: 50, or every message within --since)
+    /// Number of messages to return (default: 50, or every match within --since)
     #[arg(long)]
     limit: Option<usize>,
+    /// Only messages from this user ID
+    #[arg(long, value_parser = snowflake)]
+    author: Option<u64>,
+    /// Only messages containing this text, ignoring case
+    #[arg(long)]
+    contains: Option<String>,
     /// Only messages newer than this, such as 2h or 3d
     #[arg(long)]
     since: Option<String>,
@@ -83,7 +89,11 @@ pub async fn messages(run: &Arc<Run>, args: Messages) -> Result<CommandOutput> {
         Some(after) => History::after(channel_id, serenity::MessageId::new(after)),
         None => History::before(channel_id, args.before.map(serenity::MessageId::new)),
     };
+    let author = args.author.map(serenity::UserId::new);
+    let contains = args.contains.as_deref().map(str::to_lowercase);
     let mut messages = Vec::new();
+    let mut scanned = 0;
+    let mut scan_stopped_at = None;
     'pages: loop {
         if run.cancel.is_cancelled() {
             bail!("cancelled");
@@ -99,23 +109,52 @@ pub async fn messages(run: &Arc<Run>, args: Messages) -> Result<CommandOutput> {
                 }
                 continue;
             }
-            messages.push(message);
-            if messages.len() == limit {
+            scanned += 1;
+            let id = message.id;
+            let matches = author.is_none_or(|author| message.author.id == author)
+                && contains
+                    .as_deref()
+                    .is_none_or(|text| message.content.to_lowercase().contains(text));
+            if matches {
+                messages.push(message);
+                if messages.len() == limit {
+                    break 'pages;
+                }
+            }
+            if scanned == MAX_MESSAGES {
+                scan_stopped_at = Some(id);
                 break 'pages;
             }
         }
     }
     messages.sort_by_key(|message| message.id);
-    let text = messages
+    let mut text = messages
         .iter()
         .map(|message| format_message(&run.discord, run.guild_id, message))
         .collect::<Vec<_>>()
         .join("\n\n");
-    Ok(CommandOutput::text(if text.is_empty() {
-        "No messages found.".to_owned()
-    } else {
-        text
-    }))
+    if text.is_empty() {
+        text.push_str("No messages found.");
+    }
+    if author.is_some() || contains.is_some() {
+        write!(
+            text,
+            "\n\n{} matching messages out of {scanned} scanned.",
+            messages.len()
+        )?;
+    }
+    if let Some(id) = scan_stopped_at {
+        let direction = if args.after.is_some() {
+            "after"
+        } else {
+            "before"
+        };
+        write!(
+            text,
+            " Stopped after scanning {MAX_MESSAGES} messages; continue with --{direction} {id}."
+        )?;
+    }
+    Ok(CommandOutput::text(text))
 }
 
 pub async fn message(run: &Arc<Run>, args: Message) -> Result<CommandOutput> {

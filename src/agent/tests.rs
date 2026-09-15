@@ -213,6 +213,35 @@ async fn unknown_tool_and_bad_arguments_are_recoverable_results() -> Result<()> 
 }
 
 #[tokio::test]
+async fn last_step_answers_without_tools() -> Result<()> {
+    let (server, llm) = llm_with_responses(vec![
+        tool_turn(
+            json!([tool_call(0, "one", "echo", r#"{"text":"found"}"#)]),
+            "tool_calls",
+        ),
+        assistant_text("partial answer"),
+    ])
+    .await?;
+    let tools = ToolSet::new(vec![echo_tool()]);
+    let mut transcript = vec![user("start")];
+    let (_steer, mut steering) = mpsc::unbounded_channel();
+
+    let outcome = run_agent(&llm, &tools, 2, &mut transcript, &mut steering).await?;
+
+    assert_eq!(outcome, Outcome::TurnLimit);
+    assert!(
+        matches!(&transcript[3], Message::User { content: UserContent::Text(text) } if text == STEP_LIMIT_NOTICE)
+    );
+    assert!(
+        matches!(&transcript[4], Message::Assistant(message) if message.content.as_deref() == Some("partial answer"))
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    let last: Value = serde_json::from_slice(&requests[1].body)?;
+    assert!(last.get("tools").is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn length_finish_does_not_execute_tools() -> Result<()> {
     let (_server, llm) = llm_with_responses(vec![
         tool_turn(json!([tool_call(0, "cut", "count", "{")]), "length"),

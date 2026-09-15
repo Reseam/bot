@@ -10,6 +10,8 @@ use crate::llm::{
 use crate::text::truncate_output;
 use crate::tools::{ImageData, ToolOutput, ToolSet};
 
+const STEP_LIMIT_NOTICE: &str = "STEP LIMIT REACHED (notice from the bot, not a user): tools are disabled for this last step. Answer the invoker's request now with what you have found, and say plainly what is incomplete.";
+
 mod compaction;
 
 use compaction::{ContextUsage, compact_if_needed};
@@ -56,7 +58,7 @@ impl Agent<'_> {
     ) -> Result<Outcome> {
         let specs = self.tools.specs();
         let mut latest_usage = None;
-        for _ in 0..self.max_turns {
+        for turn in 1..=self.max_turns {
             drain_steering(steering, transcript);
             if cancel.is_cancelled() {
                 return Ok(Outcome::Cancelled);
@@ -77,10 +79,17 @@ impl Agent<'_> {
                 let _ = events.send(AgentEvent::Compacted);
             }
 
+            let last_turn = turn == self.max_turns;
+            if last_turn {
+                transcript.push(Message::User {
+                    content: UserContent::Text(STEP_LIMIT_NOTICE.to_owned()),
+                });
+            }
             let _ = events.send(AgentEvent::TurnStarted);
+            let tools = if last_turn { &[][..] } else { &specs };
             let completion = self
                 .llm
-                .complete(self.system, transcript, &specs, cancel, |delta| {
+                .complete(self.system, transcript, tools, cancel, |delta| {
                     let event = match delta {
                         Delta::Text(text) => AgentEvent::Text(text),
                         Delta::Restart => AgentEvent::TurnRestarted,
@@ -105,6 +114,13 @@ impl Agent<'_> {
                 transcript_len: transcript.len(),
             });
 
+            if last_turn {
+                append_results(
+                    transcript,
+                    error_results(&tool_calls, "not run: the step limit was reached"),
+                );
+                return Ok(Outcome::TurnLimit);
+            }
             if tool_calls.is_empty() {
                 if drain_steering(steering, transcript) == 0 {
                     return Ok(Outcome::Finished);

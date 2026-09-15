@@ -122,7 +122,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_turns: 40,
+            max_turns: 100,
             history_messages: 0,
             conversation_retention_days: 30,
             compact_at_tokens: 500_000,

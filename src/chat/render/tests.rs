@@ -10,6 +10,8 @@ fn renderer() -> Renderer {
         finished: 0,
         failed: 0,
         rendered: Vec::new(),
+        started: Instant::now(),
+        steps: 0,
         last_edit: Instant::now(),
         separate_next_text: false,
         turn_start: 0,

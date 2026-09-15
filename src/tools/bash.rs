@@ -17,7 +17,7 @@ Paths: /workspace is the writable working directory. /repos/<host>/<owner>/<name
 Built in: common coreutils, grep, rg, sed, awk, jq, yq, sqlite3, xan (CSV), diff, tar, gzip, find, python3 (standard library only), js-exec (JavaScript), curl, and html-to-markdown. There is no git, package manager, or compiler.
 
 Bridge commands (run `COMMAND --help` for details):
-- discord: read messages, attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
+- discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
 - repo clone URL [--ref REF] [--history]: clone or update an HTTPS repository.
 - mcp list, mcp SERVER TOOL --help, mcp SERVER TOOL key=value: call MCP services such as web search.
 - view FILE: attach an image file to this result so you can see it.
@@ -31,7 +31,7 @@ Paths: /workspace is the writable working directory.
 Built in: common coreutils, grep, rg, sed, awk, jq, yq, sqlite3, xan (CSV), diff, tar, gzip, and find. There is no network access, python3, js-exec, git, package manager, or compiler.
 
 Bridge commands (run `COMMAND --help` for details):
-- discord: read messages, attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
+- discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
 - view FILE: attach an image file to this result so you can see it.
 
 Moderation and messages to other channels ask the invoker for approval.";

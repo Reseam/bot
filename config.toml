@@ -19,7 +19,7 @@ vision = true
 extra_body = { provider = { ignore = ["Alibaba"] } }
 
 [agent]
-max_turns = 40
+max_turns = 100
 
 [forges.forgejo]
 kind = "forgejo"
