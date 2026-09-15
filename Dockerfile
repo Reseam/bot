@@ -17,12 +17,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 bot \
-    && mkdir /data \
-    && chown bot:bot /data
+    && install -d -o bot -g bot /var/lib/reseam-bot
 COPY --from=build /src/target/release/reseam-bot /usr/local/bin/reseam-bot
 COPY config.toml /etc/reseam-bot/config.toml
-ENV RESEAM_BOT_CONFIG=/etc/reseam-bot/config.toml DATA_DIR=/data
+ENV RESEAM_BOT_CONFIG=/etc/reseam-bot/config.toml DATA_DIR=/var/lib/reseam-bot
 USER bot
 WORKDIR /home/bot
-VOLUME /data
+VOLUME /var/lib/reseam-bot
 CMD ["reseam-bot"]
