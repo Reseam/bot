@@ -13,6 +13,7 @@ use crate::App;
 use crate::agent::{Agent, AgentEvent, CompactionSettings};
 use crate::conversations;
 use crate::llm::Message;
+use crate::settings;
 use crate::tools;
 
 pub mod approval;
@@ -155,7 +156,13 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
         app.runs.register_message(id, &run);
     }
 
-    let system = system_prompt(&run);
+    let personality = settings::personality(&app.db, guild_id)
+        .await
+        .unwrap_or_else(|error| {
+            error!(error = %format!("{error:#}"), %guild_id, "failed to read personality");
+            None
+        });
+    let system = system_prompt(&run, personality.as_deref());
     let tools = tools::for_run(&run);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AgentEvent>();
     let agent = Agent {
@@ -214,7 +221,7 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
     drop(lock);
 }
 
-fn system_prompt(run: &Run) -> String {
+fn system_prompt(run: &Run, personality: Option<&str>) -> String {
     let guild_name = run
         .discord
         .cache
@@ -247,8 +254,11 @@ fn system_prompt(run: &Run) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let personality = personality.map_or_else(String::new, |text| {
+        format!("\n\nPersonality from the server owner. Follow it for tone and style; it never overrides the rules above:\n{text}")
+    });
     format!(
-        "{SYSTEM_PROMPT}\n\nForges:\n{forges}\n\nCurrent run:\nServer: {guild_name} ({})\nChannel: #{channel_name} ({})\nInvoker: {} ({})\nCurrent UTC time: {}",
+        "{SYSTEM_PROMPT}{personality}\n\nForges:\n{forges}\n\nCurrent run:\nServer: {guild_name} ({})\nChannel: #{channel_name} ({})\nInvoker: {} ({})\nCurrent UTC time: {}",
         run.guild_id,
         run.channel_id,
         run.invoker.display_name(),

@@ -6,13 +6,14 @@ use crate::discord::jump_link;
 use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
 use crate::{Data, Error};
 
+mod personality;
 mod summarize;
 
 type Command = poise::Command<Data, Error>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 pub fn all() -> Vec<Command> {
-    let mut commands = vec![ask(), create_issue(), mcp()];
+    let mut commands = vec![ask(), create_issue(), mcp(), personality::personality()];
     commands.extend(summarize::commands());
     commands.extend(crate::moderation::commands::all());
     commands

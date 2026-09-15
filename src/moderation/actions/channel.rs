@@ -3,7 +3,7 @@ use poise::serenity_prelude as serenity;
 use sqlx::SqlitePool;
 
 use super::{post_log, require_channel_permission};
-use crate::db::{discord_id, stored_discord_id};
+use crate::db::discord_id;
 use crate::discord::{History, is_thread};
 use crate::moderation::{
     Action, Moderator, PurgeCandidate, Record, SavedOverwrite, is_staff_role, lock_plan,
@@ -254,39 +254,6 @@ async fn saved_overwrites(
         .context("failed to read channel lock")?
         .map(|json| serde_json::from_str(&json).context("invalid saved channel permissions"))
         .transpose()
-}
-
-pub async fn set_mod_log(
-    db: &SqlitePool,
-    guild_id: serenity::GuildId,
-    channel_id: serenity::ChannelId,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO guild_settings (guild_id, mod_log_channel_id) VALUES (?, ?) \
-         ON CONFLICT(guild_id) DO UPDATE SET mod_log_channel_id = excluded.mod_log_channel_id",
-    )
-    .bind(discord_id(guild_id.get())?)
-    .bind(discord_id(channel_id.get())?)
-    .execute(db)
-    .await
-    .context("failed to save moderation log channel")?;
-    Ok(())
-}
-
-pub async fn mod_log_channel(
-    db: &SqlitePool,
-    guild_id: serenity::GuildId,
-) -> Result<Option<serenity::ChannelId>> {
-    sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT mod_log_channel_id FROM guild_settings WHERE guild_id = ?",
-    )
-    .bind(discord_id(guild_id.get())?)
-    .fetch_optional(db)
-    .await
-    .context("failed to read moderation log channel")?
-    .flatten()
-    .map(|id| stored_discord_id(id).map(serenity::ChannelId::new))
-    .transpose()
 }
 
 async fn log(

@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result, bail};
 use poise::serenity_prelude as serenity;
 
 use super::{Moderator, actions};
+use crate::settings;
 use crate::text::parse_duration;
 use crate::{Data, Error};
 
@@ -292,10 +293,10 @@ async fn modlog(
     let db = &ctx.data().db;
     let text = match channel {
         Some(channel) => {
-            actions::set_mod_log(db, guild_id, channel.id).await?;
+            settings::set_mod_log_channel(db, guild_id, channel.id).await?;
             format!("Moderation log set to <#{}>.", channel.id)
         }
-        None => actions::mod_log_channel(db, guild_id).await?.map_or_else(
+        None => settings::mod_log_channel(db, guild_id).await?.map_or_else(
             || "No moderation log channel is configured.".to_owned(),
             |channel| format!("Moderation log: <#{channel}>."),
         ),

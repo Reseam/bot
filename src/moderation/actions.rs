@@ -9,9 +9,7 @@ use crate::discord::{UNKNOWN_MEMBER, error_code, resolve_channel};
 mod channel;
 mod logging;
 
-pub use channel::{
-    delete_message, lock, mod_log_channel, purge, set_mod_log, set_slowmode, unlock,
-};
+pub use channel::{delete_message, lock, purge, set_slowmode, unlock};
 pub use logging::post_log;
 
 pub struct Outcome {

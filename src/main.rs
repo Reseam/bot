@@ -15,6 +15,7 @@ mod locks;
 mod mcp;
 mod moderation;
 mod sandbox;
+mod settings;
 #[cfg(test)]
 mod test_support;
 mod text;

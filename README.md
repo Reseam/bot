@@ -23,6 +23,7 @@ Only owners (`access.owner_ids`) and members with a team role (`access.team_role
 | `Create issue` (message menu) | team | Draft an issue from a message and create it after approval |
 | `/mcp status` | team | MCP server status and tools |
 | `/mcp reconnect server` | owners | Reconnect an MCP server |
+| `/personality` | owners | Write or clear extra instructions for the bot's tone and style |
 | `/warn`, `/timeout`, `/untimeout` | Moderate Members | |
 | `/kick` | Kick Members | |
 | `/ban`, `/unban` | Ban Members | `/ban` works on users who already left and takes an optional duration |
@@ -86,4 +87,4 @@ cargo run
 
 ## Deployment
 
-Pushing to `main` runs `.forgejo/workflows/image.yml` on the NAS runner: kaniko builds the Dockerfile, pushes `git.reseam.app/reseam/bot:latest`, and calls the Dokploy deploy webhook. Dokploy only pulls and runs the image. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
+Pushing to `main` runs `.forgejo/workflows/image.yml` on the NAS runner. It builds the binary and the sandbox with the toolchain, cargo, and npm caches, packages them as two deterministic layers on `node:24-trixie` with crane (unchanged layers are not uploaded again), pushes `git.reseam.app/reseam/bot:latest` and the commit tag, and calls the Dokploy deploy webhook. Dokploy only pulls and runs the image. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.

@@ -4,8 +4,8 @@ use poise::serenity_prelude as serenity;
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use super::mod_log_channel;
 use crate::moderation::Record;
+use crate::settings::mod_log_channel;
 
 pub async fn post_log(
     discord: &serenity::Context,

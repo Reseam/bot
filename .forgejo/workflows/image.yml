@@ -4,29 +4,104 @@ on:
   push:
     branches: [main]
 
+env:
+  RUST_VERSION: "1.94"
+  CRANE_VERSION: v0.22.1
+  BASE_IMAGE: node:24-trixie
+  IMAGE: git.reseam.app/reseam/bot
+
 jobs:
   image:
     runs-on: docker
     container:
-      image: gcr.io/kaniko-project/executor:debug
+      image: node:24-trixie
     steps:
-      - name: Build and push
+      # actions/cache compresses with zstd when it is on PATH; the image only has gzip.
+      - name: Install zstd
+        run: apt-get update && apt-get install -y --no-install-recommends zstd
+
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Cache the Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.rustup
+          key: rustup-${{ env.RUST_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache cargo build
+        uses: https://github.com/Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('sandbox/package-lock.json') }}
+
+      - name: Cache crane
+        id: crane-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/crane
+          key: crane-${{ env.CRANE_VERSION }}
+
+      - name: Install crane
+        if: steps.crane-cache.outputs.cache-hit != 'true'
+        run: curl -fsSL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION/go-containerregistry_Linux_x86_64.tar.gz" | tar -xz -C /usr/local/bin crane
+
+      - name: Build the bot
+        run: cargo build --release --locked
+
+      - name: Build the sandbox
+        run: |
+          npm --prefix sandbox ci
+          npm --prefix sandbox run build
+          npm --prefix sandbox prune --omit=dev --omit=optional
+
+      # Each layer tarball is deterministic, so an unchanged layer keeps its digest and is not uploaded again.
+      - name: Package image layers
+        run: |
+          sandbox=usr/local/lib/reseam-bot/sandbox
+          mkdir -p "layers/deps/$sandbox" "layers/app/$sandbox" layers/app/usr/local/bin layers/app/etc/reseam-bot layers/app/home/bot layers/app/var/lib/reseam-bot
+          cp -r sandbox/node_modules "layers/deps/$sandbox/"
+          cp -r sandbox/dist sandbox/package.json "layers/app/$sandbox/"
+          cp target/release/reseam-bot layers/app/usr/local/bin/
+          cp config.toml layers/app/etc/reseam-bot/
+          chown -R 0:0 layers
+          chown 10001:10001 layers/app/home/bot layers/app/var/lib/reseam-bot
+          for layer in deps app; do
+            tar --sort=name --mtime=@0 --numeric-owner --format=posix \
+              --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
+              -C "layers/$layer" -cf "$layer.tar" .
+          done
+
+      - name: Push the image
         env:
-          GIT_USERNAME: ${{ github.actor }}
-          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
-          auth=$(printf '%s:%s' "$REGISTRY_USER" "$REGISTRY_TOKEN" | base64 -w0)
-          printf '{"auths":{"git.reseam.app":{"auth":"%s"}}}' "$auth" > /kaniko/.docker/config.json
-          /kaniko/executor \
-            --context "git://git.reseam.app/reseam/bot.git#refs/heads/main#${{ github.sha }}" \
-            --destination git.reseam.app/reseam/bot:latest \
-            --destination git.reseam.app/reseam/bot:${{ github.sha }} \
-            --cache=true \
-            --cache-repo git.reseam.app/reseam/bot-cache
+          crane auth login git.reseam.app -u "$REGISTRY_USER" -p "$REGISTRY_TOKEN"
+          crane mutate "$BASE_IMAGE" --append deps.tar --append app.tar \
+            --entrypoint /usr/local/bin/reseam-bot --cmd= \
+            --user 10001:10001 --workdir /home/bot \
+            -e HOME=/home/bot \
+            -e NODE_ENV=production \
+            -e RESEAM_BOT_CONFIG=/etc/reseam-bot/config.toml \
+            -e DATA_DIR=/var/lib/reseam-bot \
+            -e SANDBOX_ENTRY=/usr/local/lib/reseam-bot/sandbox/dist/main.js \
+            -t "$IMAGE:${{ github.sha }}"
+          crane tag "$IMAGE:${{ github.sha }}" latest
+
       - name: Deploy
         env:
           DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK }}
         run: |
-          wget -q -O- --header "Content-Type: application/json" --post-data "{}" "$DOKPLOY_WEBHOOK"
+          curl -fsS -X POST -H "Content-Type: application/json" -d "{}" "$DOKPLOY_WEBHOOK"
