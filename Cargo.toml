@@ -1,0 +1,39 @@
+[package]
+name = "reseam-bot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[dependencies]
+anyhow = "1"
+base64 = "0.23"
+dotenvy = "0.15"
+eventsource-stream = "0.2"
+futures = "0.3"
+humantime = "2"
+ignore = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pdf-extract = "0.12"
+poise = "0.7"
+quick-xml = "0.42"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"] }
+rmcp = { version = "3.3", features = ["client", "transport-streamable-http-client-reqwest", "transport-child-process"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "fs", "time", "sync", "io-util"] }
+tokio-util = "0.7"
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[profile.release]
+strip = true
+lto = "thin"
