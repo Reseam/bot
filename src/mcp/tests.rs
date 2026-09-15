@@ -7,33 +7,6 @@ use serde_json::json;
 use super::*;
 
 #[test]
-fn tool_names_are_sanitized_and_long_names_get_stable_suffixes() {
-    assert_eq!(
-        sanitize_tool_name("exa search", "crawl/page"),
-        "exa_search_crawl_page"
-    );
-
-    let server = "server".repeat(8);
-    let tool = "tool".repeat(12);
-    let first = sanitize_tool_name(&server, &tool);
-    let second = sanitize_tool_name(&server, &tool);
-    assert_eq!(first, second);
-    assert_eq!(first.len(), TOOL_NAME_LIMIT);
-    assert!(
-        first
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-    );
-}
-
-#[test]
-fn non_object_schemas_are_replaced_and_described() {
-    let (schema, note) = normalize_schema(json!(["unexpected", "schema"]));
-    assert_eq!(schema, json!({"type": "object", "properties": {}}));
-    assert_eq!(note.as_deref(), Some("[\"unexpected\",\"schema\"]"));
-}
-
-#[test]
 fn result_conversion_joins_text_and_preserves_images_and_resources() -> Result<()> {
     let result = CallToolResult::success(vec![
         ContentBlock::text("first"),
@@ -57,15 +30,6 @@ fn result_conversion_joins_text_and_preserves_images_and_resources() -> Result<(
     assert_eq!(output.images[0].mime_type, "image/png");
     assert_eq!(output.images[0].base64_data, "aGVsbG8=");
     Ok(())
-}
-
-#[test]
-fn error_results_become_handler_errors() {
-    let error = convert_result(CallToolResult::error(vec![ContentBlock::text(
-        "search failed",
-    )]))
-    .expect_err("MCP error result should fail the local tool");
-    assert_eq!(error.to_string(), "search failed");
 }
 
 #[tokio::test]

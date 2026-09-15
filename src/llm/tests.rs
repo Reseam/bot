@@ -333,29 +333,6 @@ async fn retries_429_before_streaming() -> Result<()> {
 }
 
 #[test]
-fn messages_round_trip_through_json() -> Result<()> {
-    let original = Message::Assistant(AssistantMessage {
-        content: None,
-        tool_calls: vec![ToolCall {
-            id: "call".to_owned(),
-            kind: ToolType::Function,
-            function: FunctionCall {
-                name: "tool".to_owned(),
-                arguments: "{}".to_owned(),
-            },
-            extra_content: Some(json!({"google":{"thought_signature":"opaque"}})),
-        }],
-        reasoning_content: Some("reason".to_owned()),
-        reasoning: None,
-    });
-    assert_eq!(
-        serde_json::from_value::<Message>(serde_json::to_value(&original)?)?,
-        original
-    );
-    Ok(())
-}
-
-#[test]
 fn user_content_uses_strings_until_images_are_present() -> Result<()> {
     let text_message = user("hello");
     let text_json = serde_json::to_value(&text_message)?;

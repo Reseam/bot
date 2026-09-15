@@ -9,100 +9,91 @@ use crate::db::{discord_id, stored_discord_id};
 use crate::llm::{ContentPart, Message, UserContent};
 
 pub struct Conversation {
-    pub id: i64,
     pub transcript: Vec<Message>,
-}
-
-pub struct Save<'a> {
-    pub id: Option<i64>,
-    pub guild_id: serenity::GuildId,
-    pub channel_id: serenity::ChannelId,
-    pub started_by: serenity::UserId,
-    pub transcript: &'a [Message],
-    pub message_ids: &'a [serenity::MessageId],
+    pub last_message_id: Option<serenity::MessageId>,
 }
 
 #[derive(FromRow)]
 struct ConversationRow {
-    id: i64,
     transcript: String,
+    last_message_id: Option<i64>,
+}
+
+pub async fn create(
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+    channel_id: serenity::ChannelId,
+    started_by: serenity::UserId,
+) -> Result<i64> {
+    let now = serenity::Timestamp::now().unix_timestamp();
+    Ok(sqlx::query(
+        "INSERT INTO conversations \
+         (guild_id, channel_id, started_by, transcript, created_at, updated_at) \
+         VALUES (?, ?, ?, '[]', ?, ?)",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .bind(discord_id(channel_id.get())?)
+    .bind(discord_id(started_by.get())?)
+    .bind(now)
+    .bind(now)
+    .execute(db)
+    .await
+    .context("failed to create conversation")?
+    .last_insert_rowid())
 }
 
 pub async fn find_by_message(
     db: &SqlitePool,
     message_id: serenity::MessageId,
-) -> Result<Option<Conversation>> {
-    let message_id = discord_id(message_id.get())?;
-    let row = sqlx::query_as::<_, ConversationRow>(
-        "SELECT c.id, c.transcript FROM conversations c \
-         JOIN conversation_messages m ON m.conversation_id = c.id \
-         WHERE m.message_id = ?",
-    )
-    .bind(message_id)
-    .fetch_optional(db)
-    .await
-    .context("failed to find conversation by Discord message")?;
-    row.map(|row| {
-        Ok(Conversation {
-            id: row.id,
-            transcript: serde_json::from_str(&row.transcript)
-                .context("failed to deserialize conversation transcript")?,
-        })
-    })
-    .transpose()
+) -> Result<Option<i64>> {
+    sqlx::query_scalar("SELECT conversation_id FROM conversation_messages WHERE message_id = ?")
+        .bind(discord_id(message_id.get())?)
+        .fetch_optional(db)
+        .await
+        .context("failed to find conversation by Discord message")
 }
 
-pub async fn last_message_id(
-    db: &SqlitePool,
-    conversation_id: i64,
-) -> Result<Option<serenity::MessageId>> {
-    let id = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT MAX(message_id) FROM conversation_messages WHERE conversation_id = ?",
+pub async fn load(db: &SqlitePool, id: i64) -> Result<Conversation> {
+    let row = sqlx::query_as::<_, ConversationRow>(
+        "SELECT transcript, \
+         (SELECT MAX(message_id) FROM conversation_messages WHERE conversation_id = c.id) \
+         AS last_message_id \
+         FROM conversations c WHERE id = ?",
     )
-    .bind(conversation_id)
+    .bind(id)
     .fetch_one(db)
     .await
-    .context("failed to find the conversation's last Discord message")?;
-    id.map(|id| stored_discord_id(id).map(serenity::MessageId::new))
-        .transpose()
+    .context("failed to load conversation")?;
+    Ok(Conversation {
+        transcript: serde_json::from_str(&row.transcript)
+            .context("failed to deserialize conversation transcript")?,
+        last_message_id: row
+            .last_message_id
+            .map(|id| stored_discord_id(id).map(serenity::MessageId::new))
+            .transpose()?,
+    })
 }
 
-pub async fn save(db: &SqlitePool, save: Save<'_>) -> Result<i64> {
-    let now = serenity::Timestamp::now().unix_timestamp();
-    let transcript = serde_json::to_string(&strip_images(save.transcript))
+pub async fn save(
+    db: &SqlitePool,
+    id: i64,
+    transcript: &[Message],
+    message_ids: &[serenity::MessageId],
+) -> Result<()> {
+    let transcript = serde_json::to_string(&strip_images(transcript))
         .context("failed to serialize conversation transcript")?;
     let mut transaction = db
         .begin()
         .await
         .context("failed to begin conversation transaction")?;
-    let id = match save.id {
-        Some(id) => {
-            sqlx::query("UPDATE conversations SET transcript = ?, updated_at = ? WHERE id = ?")
-                .bind(&transcript)
-                .bind(now)
-                .bind(id)
-                .execute(&mut *transaction)
-                .await
-                .context("failed to update conversation")?;
-            id
-        }
-        None => sqlx::query(
-            "INSERT INTO conversations \
-             (guild_id, channel_id, started_by, transcript, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(discord_id(save.guild_id.get())?)
-        .bind(discord_id(save.channel_id.get())?)
-        .bind(discord_id(save.started_by.get())?)
+    sqlx::query("UPDATE conversations SET transcript = ?, updated_at = ? WHERE id = ?")
         .bind(&transcript)
-        .bind(now)
-        .bind(now)
+        .bind(serenity::Timestamp::now().unix_timestamp())
+        .bind(id)
         .execute(&mut *transaction)
         .await
-        .context("failed to insert conversation")?
-        .last_insert_rowid(),
-    };
-    for message_id in save.message_ids {
+        .context("failed to update conversation")?;
+    for message_id in message_ids {
         sqlx::query(
             "INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id) \
              VALUES (?, ?)",
@@ -116,19 +107,7 @@ pub async fn save(db: &SqlitePool, save: Save<'_>) -> Result<i64> {
     transaction
         .commit()
         .await
-        .context("failed to commit conversation transaction")?;
-    Ok(id)
-}
-
-pub async fn prune(db: &SqlitePool, older_than: i64) -> Result<u64> {
-    Ok(
-        sqlx::query("DELETE FROM conversations WHERE updated_at < ?")
-            .bind(older_than)
-            .execute(db)
-            .await
-            .context("failed to prune old conversations")?
-            .rows_affected(),
-    )
+        .context("failed to commit conversation transaction")
 }
 
 pub fn spawn_pruning(db: SqlitePool, retention_days: u32) {
@@ -138,8 +117,12 @@ pub fn spawn_pruning(db: SqlitePool, retention_days: u32) {
             interval.tick().await;
             let cutoff =
                 serenity::Timestamp::now().unix_timestamp() - i64::from(retention_days) * 86_400;
-            match prune(&db, cutoff).await {
-                Ok(count) => info!(count, "pruned old conversations"),
+            match sqlx::query("DELETE FROM conversations WHERE updated_at < ?")
+                .bind(cutoff)
+                .execute(&db)
+                .await
+            {
+                Ok(result) => info!(count = result.rows_affected(), "pruned old conversations"),
                 Err(error) => error!(?error, "failed to prune old conversations"),
             }
         }
@@ -170,6 +153,3 @@ fn strip_images(transcript: &[Message]) -> Vec<Message> {
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests;

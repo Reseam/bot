@@ -5,18 +5,17 @@ use super::{Moderator, actions};
 use crate::text::parse_duration;
 use crate::{Data, Error};
 
-const MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(28 * 24 * 60 * 60);
-const MAX_BAN_DURATION: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
+pub const MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(28 * 24 * 60 * 60);
+pub const MAX_BAN_DURATION: std::time::Duration =
+    std::time::Duration::from_secs(365 * 24 * 60 * 60);
+const NO_REASON: &str = "No reason provided";
 
 type Command = poise::Command<Data, Error>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
-mod cases;
-
 pub fn all() -> Vec<Command> {
     vec![
         warn(),
-        note(),
         timeout(),
         untimeout(),
         kick(),
@@ -26,42 +25,41 @@ pub fn all() -> Vec<Command> {
         slowmode(),
         lock(),
         unlock(),
+        modlog(),
     ]
-    .into_iter()
-    .chain(cases::all())
-    .collect()
+}
+
+pub fn parse_timeout(input: &str) -> Result<std::time::Duration> {
+    let duration = parse_duration(input)?;
+    if duration > MAX_TIMEOUT {
+        bail!("timeout must not exceed 28 days");
+    }
+    Ok(duration)
+}
+
+pub fn parse_ban_duration(input: &str) -> Result<std::time::Duration> {
+    let duration = parse_duration(input)?;
+    if duration > MAX_BAN_DURATION {
+        bail!("ban duration must not exceed 365 days");
+    }
+    Ok(duration)
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MODERATE_MEMBERS",
-    required_permissions = "MODERATE_MEMBERS",
     required_bot_permissions = "MODERATE_MEMBERS"
 )]
 async fn warn(ctx: Context<'_>, user: serenity::Member, reason: String) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
-    let outcome = actions::warn(&moderator, &user, &reason).await?;
-    action_reply(ctx, "Warned", user.user.id, &outcome).await
+    let outcome = actions::warn(&moderator(ctx).await?, &user, &reason).await?;
+    say(ctx, outcome.describe("Warned", user.user.id)).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MODERATE_MEMBERS",
-    required_permissions = "MODERATE_MEMBERS"
-)]
-async fn note(ctx: Context<'_>, user: serenity::Member, text: String) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
-    let outcome = actions::note(&moderator, &user, &text).await?;
-    action_reply(ctx, "Added a note for", user.user.id, &outcome).await
-}
-
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MODERATE_MEMBERS",
-    required_permissions = "MODERATE_MEMBERS",
     required_bot_permissions = "MODERATE_MEMBERS"
 )]
 async fn timeout(
@@ -70,55 +68,51 @@ async fn timeout(
     #[description = "Examples: 30m, 2h, 7d"] duration: String,
     reason: Option<String>,
 ) -> Result<()> {
-    let duration = parse_duration(&duration)?;
-    if duration > MAX_TIMEOUT {
-        bail!("duration must not exceed 28 days");
-    }
-    let moderator = moderator(ctx, false).await?;
+    let duration = parse_timeout(&duration)?;
     let outcome = actions::timeout(
-        &moderator,
+        &moderator(ctx).await?,
         &user,
         duration,
-        reason.as_deref().unwrap_or("No reason provided"),
+        reason.as_deref().unwrap_or(NO_REASON),
     )
     .await?;
-    action_reply(ctx, "Timed out", user.user.id, &outcome).await
+    say(ctx, outcome.describe("Timed out", user.user.id)).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MODERATE_MEMBERS",
-    required_permissions = "MODERATE_MEMBERS",
     required_bot_permissions = "MODERATE_MEMBERS"
 )]
 async fn untimeout(ctx: Context<'_>, user: serenity::Member, reason: Option<String>) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
     let outcome = actions::untimeout(
-        &moderator,
+        &moderator(ctx).await?,
         &user,
-        reason.as_deref().unwrap_or("No reason provided"),
+        reason.as_deref().unwrap_or(NO_REASON),
     )
     .await?;
-    action_reply(ctx, "Removed timeout from", user.user.id, &outcome).await
+    say(
+        ctx,
+        outcome.describe("Removed the timeout from", user.user.id),
+    )
+    .await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "KICK_MEMBERS",
-    required_permissions = "KICK_MEMBERS",
     required_bot_permissions = "KICK_MEMBERS"
 )]
 async fn kick(ctx: Context<'_>, user: serenity::Member, reason: Option<String>) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
     let outcome = actions::kick(
-        &moderator,
+        &moderator(ctx).await?,
         &user,
-        reason.as_deref().unwrap_or("No reason provided"),
+        reason.as_deref().unwrap_or(NO_REASON),
     )
     .await?;
-    action_reply(ctx, "Kicked", user.user.id, &outcome).await
+    say(ctx, outcome.describe("Kicked", user.user.id)).await
 }
 
 #[derive(Clone, Copy, Debug, poise::ChoiceParameter)]
@@ -145,56 +139,51 @@ impl DeleteMessages {
     slash_command,
     guild_only,
     default_member_permissions = "BAN_MEMBERS",
-    required_permissions = "BAN_MEMBERS",
     required_bot_permissions = "BAN_MEMBERS"
 )]
 async fn ban(
     ctx: Context<'_>,
-    user: serenity::Member,
+    #[description = "A member or any user, including people who already left"] user: serenity::User,
     reason: Option<String>,
-    #[description = "Optional temporary-ban duration"] duration: Option<String>,
+    #[description = "Temporary ban length, such as 3d"] duration: Option<String>,
     delete_messages: Option<DeleteMessages>,
 ) -> Result<()> {
-    let duration = duration.as_deref().map(parse_duration).transpose()?;
-    if duration.is_some_and(|duration| duration > MAX_BAN_DURATION) {
-        bail!("duration must not exceed 365 days");
-    }
-    let moderator = moderator(ctx, false).await?;
+    let duration = duration.as_deref().map(parse_ban_duration).transpose()?;
+    let moderator = moderator(ctx).await?;
+    let member = actions::member(&moderator, user.id).await?;
     let outcome = actions::ban(
         &moderator,
-        &user,
-        reason.as_deref().unwrap_or("No reason provided"),
+        user.id,
+        member.as_ref(),
+        reason.as_deref().unwrap_or(NO_REASON),
         duration,
         delete_messages.unwrap_or(DeleteMessages::None).days(),
     )
     .await?;
-    action_reply(ctx, "Banned", user.user.id, &outcome).await
+    say(ctx, outcome.describe("Banned", user.id)).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "BAN_MEMBERS",
-    required_permissions = "BAN_MEMBERS",
     required_bot_permissions = "BAN_MEMBERS"
 )]
-async fn unban(ctx: Context<'_>, user_id: String, reason: Option<String>) -> Result<()> {
-    let target = parse_user_id(&user_id)?;
-    let moderator = moderator(ctx, false).await?;
+async fn unban(ctx: Context<'_>, user: serenity::User, reason: Option<String>) -> Result<()> {
     let outcome = actions::unban(
-        &moderator,
-        target,
-        reason.as_deref().unwrap_or("No reason provided"),
+        &moderator(ctx).await?,
+        user.id,
+        reason.as_deref().unwrap_or(NO_REASON),
     )
     .await?;
-    action_reply(ctx, "Unbanned", target, &outcome).await
+    say(ctx, outcome.describe("Unbanned", user.id)).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
+    ephemeral,
     default_member_permissions = "MANAGE_MESSAGES",
-    required_permissions = "MANAGE_MESSAGES",
     required_bot_permissions = "MANAGE_MESSAGES | READ_MESSAGE_HISTORY"
 )]
 async fn purge(
@@ -202,38 +191,29 @@ async fn purge(
     #[min = 1]
     #[max = 100]
     count: u8,
-    user: Option<serenity::User>,
-    contains: Option<String>,
-    bots: Option<bool>,
+    #[description = "Only messages from this user"] user: Option<serenity::User>,
+    #[description = "Only messages containing this text"] contains: Option<String>,
+    #[description = "Only bot messages, or only non-bot messages"] bots: Option<bool>,
 ) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
-    let deleted = actions::purge_messages(
-        &moderator,
+    ctx.defer_ephemeral()
+        .await
+        .context("failed to defer purge")?;
+    let deleted = actions::purge(
+        &moderator(ctx).await?,
         ctx.channel_id(),
-        count,
-        user.as_ref().map(|user| user.id),
+        usize::from(count),
+        user.map(|user| user.id),
         contains.as_deref(),
         bots,
     )
     .await?;
-    actions::record_purge(
-        &moderator,
-        user.map(|user| user.id),
-        ctx.channel_id(),
-        deleted,
-    )
-    .await?;
-    ctx.say(format!("Deleted {deleted} messages."))
-        .await
-        .context("failed to send purge result")?;
-    Ok(())
+    say(ctx, format!("Deleted {deleted} messages.")).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
-    required_permissions = "MANAGE_CHANNELS",
     required_bot_permissions = "MANAGE_CHANNELS"
 )]
 async fn slowmode(
@@ -241,126 +221,109 @@ async fn slowmode(
     #[min = 0]
     #[max = 21600]
     seconds: u16,
-    channel: Option<serenity::GuildChannel>,
+    #[channel_types("Text", "News", "PublicThread", "PrivateThread", "NewsThread")] channel: Option<
+        serenity::GuildChannel,
+    >,
 ) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
-    let channel = selected_channel(ctx, channel)?;
-    let outcome = actions::set_slowmode(&moderator, &channel, seconds).await?;
-    ctx.say(format!(
-        "Set slowmode in <#{}> to {seconds} seconds. Case #{}.",
-        channel.id, outcome.case.id
-    ))
+    let channel_id = channel.map_or(ctx.channel_id(), |channel| channel.id);
+    actions::set_slowmode(&moderator(ctx).await?, channel_id, seconds).await?;
+    say(
+        ctx,
+        format!("Set slowmode in <#{channel_id}> to {seconds} seconds."),
+    )
     .await
-    .context("failed to send slowmode result")?;
-    Ok(())
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
-    required_permissions = "MANAGE_CHANNELS",
-    required_bot_permissions = "MANAGE_CHANNELS"
+    required_bot_permissions = "MANAGE_ROLES"
 )]
 async fn lock(
     ctx: Context<'_>,
-    channel: Option<serenity::GuildChannel>,
+    #[channel_types("Text", "News")] channel: Option<serenity::GuildChannel>,
     reason: Option<String>,
 ) -> Result<()> {
-    lock_command(ctx, channel, reason, true).await
+    let channel_id = channel.map_or(ctx.channel_id(), |channel| channel.id);
+    actions::lock(
+        &moderator(ctx).await?,
+        channel_id,
+        reason.as_deref().unwrap_or(NO_REASON),
+    )
+    .await?;
+    say(ctx, format!("Locked <#{channel_id}>.")).await
 }
 
 #[poise::command(
     slash_command,
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
-    required_permissions = "MANAGE_CHANNELS",
-    required_bot_permissions = "MANAGE_CHANNELS"
+    required_bot_permissions = "MANAGE_ROLES"
 )]
 async fn unlock(
     ctx: Context<'_>,
-    channel: Option<serenity::GuildChannel>,
+    #[channel_types("Text", "News")] channel: Option<serenity::GuildChannel>,
     reason: Option<String>,
 ) -> Result<()> {
-    lock_command(ctx, channel, reason, false).await
-}
-
-async fn lock_command(
-    ctx: Context<'_>,
-    channel: Option<serenity::GuildChannel>,
-    reason: Option<String>,
-    locked: bool,
-) -> Result<()> {
-    let moderator = moderator(ctx, false).await?;
-    let channel = selected_channel(ctx, channel)?;
-    let outcome = actions::set_locked(
-        &moderator,
-        &channel,
-        locked,
-        reason.as_deref().unwrap_or("No reason provided"),
+    let channel_id = channel.map_or(ctx.channel_id(), |channel| channel.id);
+    actions::unlock(
+        &moderator(ctx).await?,
+        channel_id,
+        reason.as_deref().unwrap_or(NO_REASON),
     )
     .await?;
-    ctx.say(format!(
-        "{} <#{}>. Case #{}.",
-        if locked { "Locked" } else { "Unlocked" },
-        channel.id,
-        outcome.case.id
-    ))
-    .await
-    .context("failed to send channel lock result")?;
-    Ok(())
+    say(ctx, format!("Unlocked <#{channel_id}>.")).await
 }
 
-async fn moderator(ctx: Context<'_>, via_ai: bool) -> Result<Moderator<'_>> {
-    let actor = ctx
-        .author_member()
-        .await
-        .context("failed to fetch command member")?;
+#[poise::command(
+    slash_command,
+    guild_only,
+    ephemeral,
+    default_member_permissions = "MANAGE_GUILD"
+)]
+async fn modlog(
+    ctx: Context<'_>,
+    #[description = "Channel for moderation logs"]
+    #[channel_types("Text")]
+    channel: Option<serenity::GuildChannel>,
+) -> Result<()> {
+    let guild_id = ctx.guild_id().context("modlog command has no guild")?;
+    let db = &ctx.data().db;
+    let text = match channel {
+        Some(channel) => {
+            actions::set_mod_log(db, guild_id, channel.id).await?;
+            format!("Moderation log set to <#{}>.", channel.id)
+        }
+        None => actions::mod_log_channel(db, guild_id).await?.map_or_else(
+            || "No moderation log channel is configured.".to_owned(),
+            |channel| format!("Moderation log: <#{channel}>."),
+        ),
+    };
+    say(ctx, text).await
+}
+
+async fn moderator(ctx: Context<'_>) -> Result<Moderator<'_>> {
     Ok(Moderator {
         discord: ctx.serenity_context(),
         db: &ctx.data().db,
         guild_id: ctx.guild_id().context("moderation command has no guild")?,
-        actor: actor.into_owned(),
-        via_ai,
+        actor: ctx
+            .author_member()
+            .await
+            .context("failed to fetch command member")?
+            .into_owned(),
+        via_ai: false,
     })
 }
 
-fn selected_channel(
-    ctx: Context<'_>,
-    channel: Option<serenity::GuildChannel>,
-) -> Result<serenity::GuildChannel> {
-    channel
-        .or_else(|| {
-            ctx.guild()
-                .and_then(|guild| guild.channels.get(&ctx.channel_id()).cloned())
-        })
-        .context("current channel is not available in the Discord cache")
-}
-
-async fn action_reply(
-    ctx: Context<'_>,
-    verb: &str,
-    target: serenity::UserId,
-    outcome: &actions::Outcome,
-) -> Result<()> {
-    let dm = outcome.dm_delivered.map_or(String::new(), |delivered| {
-        format!(" DM {}.", if delivered { "delivered" } else { "failed" })
-    });
-    ctx.say(format!(
-        "{verb} <@{target}>. Case #{}.{dm}",
-        outcome.case.id
-    ))
+async fn say(ctx: Context<'_>, text: String) -> Result<()> {
+    ctx.send(
+        poise::CreateReply::new()
+            .content(text)
+            .allowed_mentions(serenity::CreateAllowedMentions::new()),
+    )
     .await
     .context("failed to send moderation result")?;
     Ok(())
-}
-
-fn parse_user_id(input: &str) -> Result<serenity::UserId> {
-    let id = input
-        .parse::<u64>()
-        .context("user_id must be an unsigned integer")?;
-    if id == 0 {
-        bail!("user_id must not be zero");
-    }
-    Ok(serenity::UserId::new(id))
 }

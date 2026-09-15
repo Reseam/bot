@@ -2,8 +2,8 @@ use anyhow::{Context as _, Result};
 use poise::serenity_prelude as serenity;
 
 use crate::chat;
+use crate::discord::jump_link;
 use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
-use crate::tools::discord::jump_link;
 use crate::{Data, Error};
 
 mod summarize;
@@ -126,31 +126,31 @@ async fn ask(
         .await
         .context("failed to fetch command member")?
         .into_owned();
-    let response = post_anchor(
+    let anchor = post_anchor(
         ctx,
         format!("**{} asked:** {prompt}", member.display_name()),
     )
     .await?;
-    let app = ctx.data().clone();
-    let request = chat::build_command_request(
-        &app,
+    chat::start_new(
+        ctx.data(),
         ctx.serenity_context(),
-        chat::CommandRequest {
+        chat::NewRun {
             guild_id,
             channel_id: ctx.channel_id(),
-            response,
             invoker: member,
-            prompt,
-            attachment: file,
             include_history: true,
-            history_before: None,
-            referenced: None,
+            input: chat::context::ContextInput {
+                before: anchor.id,
+                addressed_id: anchor.id,
+                timestamp: anchor.timestamp,
+                content: prompt,
+                mentions: Vec::new(),
+                attachments: file.into_iter().collect(),
+                referenced: None,
+            },
         },
     )
-    .await?;
-    let discord = ctx.serenity_context().clone();
-    tokio::spawn(async move { chat::run(app, discord, request).await });
-    Ok(())
+    .await
 }
 
 #[poise::command(
@@ -167,7 +167,7 @@ async fn create_issue(ctx: Context<'_>, message: serenity::Message) -> Result<()
         .await
         .context("failed to fetch command member")?
         .into_owned();
-    let response = post_anchor(
+    let anchor = post_anchor(
         ctx,
         format!(
             "**{} requested an issue from:** {}",
@@ -176,25 +176,28 @@ async fn create_issue(ctx: Context<'_>, message: serenity::Message) -> Result<()
         ),
     )
     .await?;
-    let prompt = "Draft an issue from the referenced message and its surrounding discussion. Pick the configured forge and repository, preferring default repositories. If the destination is unclear, ask me in your answer. Otherwise create the issue with forge_create_issue, which will request my approval.".to_owned();
-    let app = ctx.data().clone();
-    let request = chat::build_command_request(
-        &app,
+    let prompt = format!(
+        "Draft an issue from the referenced message and its surrounding discussion, then create it with a POST to the right forge's issues API, which asks me for approval. Prefer a default repository when it fits. If the destination is unclear, ask me in your answer instead. Mention the source discussion at the end of the issue body: {}",
+        jump_link(guild_id, message.channel_id, message.id)
+    );
+    chat::start_new(
+        ctx.data(),
         ctx.serenity_context(),
-        chat::CommandRequest {
+        chat::NewRun {
             guild_id,
             channel_id: message.channel_id,
-            response,
             invoker: member,
-            prompt,
-            attachment: None,
             include_history: true,
-            history_before: Some(message.id),
-            referenced: Some(Box::new(message)),
+            input: chat::context::ContextInput {
+                before: message.id,
+                addressed_id: anchor.id,
+                timestamp: anchor.timestamp,
+                content: prompt,
+                mentions: Vec::new(),
+                attachments: Vec::new(),
+                referenced: Some(Box::new(message)),
+            },
         },
     )
-    .await?;
-    let discord = ctx.serenity_context().clone();
-    tokio::spawn(async move { chat::run(app, discord, request).await });
-    Ok(())
+    .await
 }

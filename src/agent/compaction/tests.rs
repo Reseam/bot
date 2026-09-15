@@ -12,6 +12,7 @@ fn settings(threshold: u64, keep_recent_tokens: u64) -> CompactionSettings {
     CompactionSettings {
         context_window: threshold,
         max_output_tokens: 0,
+        compact_at_tokens: u64::MAX,
         reserve_tokens: 0,
         keep_recent_tokens,
     }

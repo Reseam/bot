@@ -18,27 +18,13 @@ pub enum FinalState {
 pub struct Renderer {
     messages: Vec<serenity::Message>,
     answer: String,
-    running: Vec<RunningTool>,
-    used: Vec<UsedTool>,
+    running: Vec<String>,
+    finished: usize,
+    failed: usize,
     rendered: Vec<String>,
     last_edit: Instant,
     separate_next_text: bool,
     compacted: bool,
-}
-
-struct RunningTool {
-    id: String,
-    name: String,
-}
-
-struct UsedTool {
-    name: String,
-    failed: bool,
-}
-
-struct ToolCount {
-    name: String,
-    count: usize,
 }
 
 impl Renderer {
@@ -68,7 +54,8 @@ impl Renderer {
             messages: vec![message],
             answer: String::new(),
             running: Vec::new(),
-            used: Vec::new(),
+            finished: 0,
+            failed: 0,
             rendered: vec!["-# Thinking…".to_owned()],
             last_edit: Instant::now(),
             separate_next_text: false,
@@ -94,15 +81,11 @@ impl Renderer {
                 }
                 self.answer.push_str(&text);
             }
-            AgentEvent::ToolStarted { id, name } => {
-                self.running.push(RunningTool { id, name });
-            }
-            AgentEvent::ToolFinished { id, name, is_error } => {
-                self.running.retain(|running| running.id != id);
-                self.used.push(UsedTool {
-                    name,
-                    failed: is_error,
-                });
+            AgentEvent::ToolStarted { id } => self.running.push(id),
+            AgentEvent::ToolFinished { id, is_error } => {
+                self.running.retain(|running| *running != id);
+                self.finished += 1;
+                self.failed += usize::from(is_error);
             }
             AgentEvent::Compacted => self.compacted = true,
         }
@@ -115,17 +98,10 @@ impl Renderer {
         if self.last_edit.elapsed() < EDIT_INTERVAL {
             return Ok(Vec::new());
         }
-        let mut footer = if self.running.is_empty() {
-            "-# Thinking…".to_owned()
-        } else {
-            format!(
-                "-# Running {}…",
-                self.running
-                    .iter()
-                    .map(|tool| tool.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+        let mut footer = match self.running.len() {
+            0 => "-# Thinking…".to_owned(),
+            1 => "-# Running a command…".to_owned(),
+            count => format!("-# Running {count} commands…"),
         };
         if self.compacted {
             footer.push_str("\n-# Compacted earlier context");
@@ -139,8 +115,8 @@ impl Renderer {
         state: FinalState,
     ) -> Result<Vec<serenity::MessageId>> {
         let footer = match state {
-            FinalState::Outcome(Outcome::Finished) if self.used.is_empty() => String::new(),
-            FinalState::Outcome(Outcome::Finished) => used_footer(&self.used),
+            FinalState::Outcome(Outcome::Finished) if self.finished == 0 => String::new(),
+            FinalState::Outcome(Outcome::Finished) => self.commands_footer(),
             FinalState::Outcome(Outcome::Cancelled) => "-# Stopped".to_owned(),
             FinalState::Outcome(Outcome::TurnLimit) => "-# Reached the turn limit".to_owned(),
             FinalState::Error(error) => format!("-# Error: {}", short_error(&error)),
@@ -222,6 +198,19 @@ impl Renderer {
         self.last_edit = Instant::now();
         Ok(added)
     }
+
+    fn commands_footer(&self) -> String {
+        let commands = if self.finished == 1 {
+            "1 command".to_owned()
+        } else {
+            format!("{} commands", self.finished)
+        };
+        if self.failed == 0 {
+            format!("-# Ran {commands}")
+        } else {
+            format!("-# Ran {commands} ({} failed)", self.failed)
+        }
+    }
 }
 
 fn stop_components(message_id: serenity::MessageId) -> Vec<serenity::CreateActionRow> {
@@ -230,38 +219,6 @@ fn stop_components(message_id: serenity::MessageId) -> Vec<serenity::CreateActio
             .label("Stop")
             .style(serenity::ButtonStyle::Danger),
     ])]
-}
-
-fn used_footer(used: &[UsedTool]) -> String {
-    let mut counts = Vec::<ToolCount>::new();
-    let mut failures = 0;
-    for tool in used {
-        failures += usize::from(tool.failed);
-        if let Some(seen) = counts.iter_mut().find(|seen| seen.name == tool.name) {
-            seen.count += 1;
-        } else {
-            counts.push(ToolCount {
-                name: tool.name.clone(),
-                count: 1,
-            });
-        }
-    }
-    let tools = counts
-        .into_iter()
-        .map(|tool| {
-            if tool.count == 1 {
-                tool.name
-            } else {
-                format!("{} ×{}", tool.name, tool.count)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    if failures == 0 {
-        format!("-# Used {tools}")
-    } else {
-        format!("-# Used {tools} ({failures} failed)")
-    }
 }
 
 fn short_error(error: &str) -> String {

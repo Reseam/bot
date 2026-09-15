@@ -5,43 +5,13 @@ use anyhow::{Result, anyhow};
 use base64::Engine;
 use futures::future::BoxFuture;
 use schemars::{JsonSchema, generate::SchemaSettings};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::chat::Run;
 use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 
-pub(crate) mod discord;
-mod forge;
-mod mcp;
-mod moderation;
-pub(crate) mod repo;
-mod shell;
-
-#[derive(Clone, Copy, JsonSchema, Deserialize)]
-#[serde(try_from = "String")]
-pub(crate) struct Snowflake(#[schemars(with = "String")] u64);
-
-impl Snowflake {
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl TryFrom<String> for Snowflake {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value
-            .parse::<u64>()
-            .map_err(|_| "Discord ID must be an unsigned integer string".to_owned())
-            .and_then(|id| {
-                (id != 0)
-                    .then_some(Self(id))
-                    .ok_or_else(|| "Discord ID must not be zero".to_owned())
-            })
-    }
-}
+mod bash;
 
 type ToolHandler = dyn Fn(Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync;
 
@@ -69,43 +39,22 @@ impl Tool {
             settings.inline_subschemas = true;
             settings.meta_schema = None;
         });
-        let schema = settings.into_generator().into_root_schema_for::<A>();
-        let mut parameters = Value::from(schema);
+        let mut parameters = Value::from(settings.into_generator().into_root_schema_for::<A>());
         if let Some(object) = parameters.as_object_mut() {
             object.remove("$schema");
             object.remove("title");
             object.remove("$defs");
         }
-        Self::raw(
-            name,
-            description,
-            parameters,
-            state,
-            move |state, arguments| {
-                let parsed = serde_json::from_value(arguments)
-                    .map_err(|error| anyhow!("invalid tool arguments: {error}"))
-                    .map(|arguments| handler(state, arguments));
-                Box::pin(async move { parsed?.await })
-            },
-        )
-    }
-
-    pub fn raw<S, F>(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        parameters: Value,
-        state: S,
-        handler: F,
-    ) -> Self
-    where
-        S: Clone + Send + Sync + 'static,
-        F: Fn(S, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync + 'static,
-    {
         Self {
             name: name.into(),
             description: description.into(),
             parameters,
-            handler: Arc::new(move |arguments| handler(state.clone(), arguments)),
+            handler: Arc::new(move |arguments| {
+                let parsed = serde_json::from_value(arguments)
+                    .map_err(|error| anyhow!("invalid tool arguments: {error}"))
+                    .map(|arguments| handler(state.clone(), arguments));
+                Box::pin(async move { parsed?.await })
+            }),
         }
     }
 
@@ -118,15 +67,6 @@ impl Tool {
 pub struct ToolOutput {
     pub text: String,
     pub images: Vec<ImageData>,
-}
-
-impl ToolOutput {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            images: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -148,7 +88,6 @@ impl ImageData {
     }
 }
 
-#[derive(Default)]
 pub struct ToolSet {
     tools: Vec<Tool>,
 }
@@ -178,16 +117,5 @@ impl ToolSet {
 }
 
 pub fn for_run(run: &Arc<Run>) -> ToolSet {
-    let mut tools = discord::tools(run);
-    tools.extend(forge::tools(run));
-    tools.extend(moderation::tools(run));
-    tools.extend(repo::tools(run));
-    if run.app.config.shell.enabled {
-        tools.extend(shell::tools(run));
-    }
-    tools.extend(mcp::tools(run));
-    ToolSet::new(tools)
+    ToolSet::new(vec![bash::tool(run)])
 }
-
-#[cfg(test)]
-mod tests;

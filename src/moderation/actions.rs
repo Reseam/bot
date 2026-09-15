@@ -1,20 +1,43 @@
 use std::time::Duration;
 
-use super::{Action, Case, Moderator, NewCase, hierarchy_allows, insert_case};
 use anyhow::{Context, Result, bail};
 use poise::serenity_prelude as serenity;
+
+use super::{Action, Moderator, Record, hierarchy_allows, set_temp_ban};
+use crate::discord::{UNKNOWN_MEMBER, error_code, resolve_channel};
 
 mod channel;
 mod logging;
 
 pub use channel::{
-    delete_message, purge_messages, record_purge, set_locked, set_mod_log, set_slowmode,
+    delete_message, lock, mod_log_channel, purge, set_mod_log, set_slowmode, unlock,
 };
 pub use logging::post_log;
 
 pub struct Outcome {
-    pub case: Case,
-    pub dm_delivered: Option<bool>,
+    dm_delivered: Option<bool>,
+}
+
+impl Outcome {
+    pub fn describe(&self, verb: &str, target: serenity::UserId) -> String {
+        let dm = match self.dm_delivered {
+            Some(true) => " DM delivered.",
+            Some(false) => " DM failed.",
+            None => "",
+        };
+        format!("{verb} <@{target}>.{dm}")
+    }
+}
+
+pub async fn member(
+    moderator: &Moderator<'_>,
+    user_id: serenity::UserId,
+) -> Result<Option<serenity::Member>> {
+    match moderator.guild_id.member(moderator.discord, user_id).await {
+        Ok(member) => Ok(Some(member)),
+        Err(error) if error_code(&error) == Some(UNKNOWN_MEMBER) => Ok(None),
+        Err(error) => Err(error).context("failed to fetch target member"),
+    }
 }
 
 pub async fn warn(
@@ -22,44 +45,18 @@ pub async fn warn(
     target: &serenity::Member,
     reason: &str,
 ) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::MODERATE_MEMBERS)?;
+    validate_target(
+        moderator,
+        target.user.id,
+        Some(target),
+        serenity::Permissions::MODERATE_MEMBERS,
+    )?;
     let reason = moderator.reason(reason);
     let dm = send_dm(moderator, target, Action::Warn, None, &reason).await;
-    finish(
-        moderator,
-        NewCase {
-            action: Action::Warn,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: Some(dm),
-        },
-    )
-    .await
-}
-
-pub async fn note(
-    moderator: &Moderator<'_>,
-    target: &serenity::Member,
-    text: &str,
-) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::MODERATE_MEMBERS)?;
-    let reason = moderator.reason(text);
-    finish(
-        moderator,
-        NewCase {
-            action: Action::Note,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
-    )
-    .await
+    log(moderator, Action::Warn, target.user.id, &reason, None, None).await;
+    Ok(Outcome {
+        dm_delivered: Some(dm),
+    })
 }
 
 pub async fn timeout(
@@ -68,9 +65,13 @@ pub async fn timeout(
     duration: Duration,
     reason: &str,
 ) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::MODERATE_MEMBERS)?;
+    validate_target(
+        moderator,
+        target.user.id,
+        Some(target),
+        serenity::Permissions::MODERATE_MEMBERS,
+    )?;
     let reason = moderator.reason(reason);
-    let dm = send_dm(moderator, target, Action::Timeout, Some(duration), &reason).await;
     let expires_at = serenity::Timestamp::now().unix_timestamp()
         + i64::try_from(duration.as_secs()).context("duration is too large")?;
     moderator
@@ -78,26 +79,28 @@ pub async fn timeout(
         .edit_member(
             moderator.discord,
             target.user.id,
-            serenity::EditMember::new().disable_communication_until_datetime(
-                serenity::Timestamp::from_unix_timestamp(expires_at)
-                    .context("timeout expiry is outside Discord's timestamp range")?,
-            ),
+            serenity::EditMember::new()
+                .disable_communication_until_datetime(
+                    serenity::Timestamp::from_unix_timestamp(expires_at)
+                        .context("timeout expiry is outside Discord's timestamp range")?,
+                )
+                .audit_log_reason(&reason),
         )
         .await
         .context("failed to timeout member")?;
-    finish(
+    let dm = send_dm(moderator, target, Action::Timeout, Some(duration), &reason).await;
+    log(
         moderator,
-        NewCase {
-            action: Action::Timeout,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration: Some(duration),
-            expires_at: Some(expires_at),
-            dm_delivered: Some(dm),
-        },
+        Action::Timeout,
+        target.user.id,
+        &reason,
+        Some(duration),
+        Some(expires_at),
     )
-    .await
+    .await;
+    Ok(Outcome {
+        dm_delivered: Some(dm),
+    })
 }
 
 pub async fn untimeout(
@@ -105,30 +108,34 @@ pub async fn untimeout(
     target: &serenity::Member,
     reason: &str,
 ) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::MODERATE_MEMBERS)?;
+    validate_target(
+        moderator,
+        target.user.id,
+        Some(target),
+        serenity::Permissions::MODERATE_MEMBERS,
+    )?;
     let reason = moderator.reason(reason);
     moderator
         .guild_id
         .edit_member(
             moderator.discord,
             target.user.id,
-            serenity::EditMember::new().enable_communication(),
+            serenity::EditMember::new()
+                .enable_communication()
+                .audit_log_reason(&reason),
         )
         .await
         .context("failed to remove member timeout")?;
-    finish(
+    log(
         moderator,
-        NewCase {
-            action: Action::Untimeout,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
+        Action::Untimeout,
+        target.user.id,
+        &reason,
+        None,
+        None,
     )
-    .await
+    .await;
+    Ok(Outcome { dm_delivered: None })
 }
 
 pub async fn kick(
@@ -136,7 +143,12 @@ pub async fn kick(
     target: &serenity::Member,
     reason: &str,
 ) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::KICK_MEMBERS)?;
+    validate_target(
+        moderator,
+        target.user.id,
+        Some(target),
+        serenity::Permissions::KICK_MEMBERS,
+    )?;
     let reason = moderator.reason(reason);
     let dm = send_dm(moderator, target, Action::Kick, None, &reason).await;
     moderator
@@ -144,90 +156,74 @@ pub async fn kick(
         .kick_with_reason(moderator.discord, target.user.id, &reason)
         .await
         .context("failed to kick member")?;
-    finish(
-        moderator,
-        NewCase {
-            action: Action::Kick,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: Some(dm),
-        },
-    )
-    .await
+    log(moderator, Action::Kick, target.user.id, &reason, None, None).await;
+    Ok(Outcome {
+        dm_delivered: Some(dm),
+    })
 }
 
 pub async fn ban(
     moderator: &Moderator<'_>,
-    target: &serenity::Member,
+    user_id: serenity::UserId,
+    target: Option<&serenity::Member>,
     reason: &str,
     duration: Option<Duration>,
     delete_message_days: u8,
 ) -> Result<Outcome> {
-    validate_target(moderator, target, serenity::Permissions::BAN_MEMBERS)?;
+    validate_target(
+        moderator,
+        user_id,
+        target,
+        serenity::Permissions::BAN_MEMBERS,
+    )?;
     let reason = moderator.reason(reason);
-    let dm = send_dm(moderator, target, Action::Ban, duration, &reason).await;
-    moderator
-        .guild_id
-        .ban_with_reason(
-            moderator.discord,
-            target.user.id,
-            delete_message_days,
-            &reason,
-        )
-        .await
-        .context("failed to ban member")?;
     let expires_at = duration
         .map(|value| i64::try_from(value.as_secs()).context("duration is too large"))
         .transpose()?
         .map(|seconds| serenity::Timestamp::now().unix_timestamp() + seconds);
-    finish(
+    let dm = match target {
+        Some(target) => Some(send_dm(moderator, target, Action::Ban, duration, &reason).await),
+        None => None,
+    };
+    moderator
+        .guild_id
+        .ban_with_reason(moderator.discord, user_id, delete_message_days, &reason)
+        .await
+        .context("failed to ban user")?;
+    set_temp_ban(moderator.db, moderator.guild_id, user_id, expires_at).await?;
+    log(
         moderator,
-        NewCase {
-            action: Action::Ban,
-            target_id: Some(target.user.id),
-            channel_id: None,
-            reason: &reason,
-            duration,
-            expires_at,
-            dm_delivered: Some(dm),
-        },
+        Action::Ban,
+        user_id,
+        &reason,
+        duration,
+        expires_at,
     )
-    .await
+    .await;
+    Ok(Outcome { dm_delivered: dm })
 }
 
 pub async fn unban(
     moderator: &Moderator<'_>,
-    target: serenity::UserId,
+    user_id: serenity::UserId,
     reason: &str,
 ) -> Result<Outcome> {
-    require_actor_permission(moderator, serenity::Permissions::BAN_MEMBERS)?;
+    validate_target(moderator, user_id, None, serenity::Permissions::BAN_MEMBERS)?;
     let reason = moderator.reason(reason);
     moderator
         .guild_id
-        .unban(moderator.discord, target)
+        .unban(moderator.discord, user_id)
         .await
         .context("failed to unban user")?;
-    finish(
-        moderator,
-        NewCase {
-            action: Action::Unban,
-            target_id: Some(target),
-            channel_id: None,
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
-    )
-    .await
+    set_temp_ban(moderator.db, moderator.guild_id, user_id, None).await?;
+    log(moderator, Action::Unban, user_id, &reason, None, None).await;
+    Ok(Outcome { dm_delivered: None })
 }
 
-pub(crate) fn validate_target(
+pub fn validate_target(
     moderator: &Moderator<'_>,
-    target: &serenity::Member,
+    user_id: serenity::UserId,
+    target: Option<&serenity::Member>,
     required: serenity::Permissions,
 ) -> Result<()> {
     let guild = moderator
@@ -236,13 +232,13 @@ pub(crate) fn validate_target(
         .guild(moderator.guild_id)
         .context("server is not available in the Discord cache")?;
     let bot_id = moderator.discord.cache.current_user().id;
-    if target.user.id == guild.owner_id {
+    if user_id == guild.owner_id {
         bail!("the server owner cannot be moderated");
     }
-    if target.user.id == moderator.actor.user.id {
+    if user_id == moderator.actor.user.id {
         bail!("you cannot moderate yourself");
     }
-    if target.user.id == bot_id {
+    if user_id == bot_id {
         bail!("the bot cannot moderate itself");
     }
     if !guild
@@ -254,14 +250,16 @@ pub(crate) fn validate_target(
             required.get_permission_names().join(", ")
         );
     }
+    let Some(target) = target else {
+        return Ok(());
+    };
     let bot = guild
         .members
         .get(&bot_id)
         .context("bot member is not available in the Discord cache")?;
-    let actor_position = highest_role_position(&guild, &moderator.actor);
     let target_position = highest_role_position(&guild, target);
     if !hierarchy_allows(
-        actor_position,
+        highest_role_position(&guild, &moderator.actor),
         target_position,
         moderator.actor.user.id == guild.owner_id,
     ) {
@@ -273,45 +271,25 @@ pub(crate) fn validate_target(
     Ok(())
 }
 
-fn require_actor_permission(
-    moderator: &Moderator<'_>,
-    required: serenity::Permissions,
-) -> Result<()> {
-    let guild = moderator
-        .discord
-        .cache
-        .guild(moderator.guild_id)
-        .context("server is not available in the Discord cache")?;
-    if !guild
-        .member_permissions(&moderator.actor)
-        .contains(required)
-    {
-        bail!(
-            "invoker is missing {}",
-            required.get_permission_names().join(", ")
-        );
-    }
-    Ok(())
-}
-
-pub(crate) fn require_actor_channel_permission(
+pub async fn require_channel_permission(
     moderator: &Moderator<'_>,
     channel_id: serenity::ChannelId,
     required: serenity::Permissions,
-) -> Result<()> {
-    let access = crate::tools::discord::resolve_channel(
+) -> Result<serenity::GuildChannel> {
+    let access = resolve_channel(
         moderator.discord,
         moderator.guild_id,
         &moderator.actor,
         channel_id,
-    )?;
+    )
+    .await?;
     if !access.permissions.contains(required) {
         bail!(
             "invoker is missing {} in this channel",
             required.get_permission_names().join(", ")
         );
     }
-    Ok(())
+    Ok(access.channel)
 }
 
 fn highest_role_position(guild: &serenity::Guild, member: &serenity::Member) -> u16 {
@@ -353,15 +331,27 @@ async fn send_dm(
         .is_ok()
 }
 
-pub(super) async fn finish(moderator: &Moderator<'_>, new_case: NewCase<'_>) -> Result<Outcome> {
-    let dm_delivered = new_case.dm_delivered;
-    let case = insert_case(
+async fn log(
+    moderator: &Moderator<'_>,
+    action: Action,
+    target: serenity::UserId,
+    reason: &str,
+    duration: Option<Duration>,
+    expires_at: Option<i64>,
+) {
+    post_log(
+        moderator.discord,
         moderator.db,
         moderator.guild_id,
         moderator.actor.user.id,
-        &new_case,
+        &Record {
+            action,
+            target: Some(target),
+            channel: None,
+            reason,
+            duration,
+            expires_at,
+        },
     )
-    .await?;
-    post_log(moderator.discord, moderator.db, &case).await;
-    Ok(Outcome { case, dm_delivered })
+    .await;
 }

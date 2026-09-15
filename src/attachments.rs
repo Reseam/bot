@@ -10,7 +10,7 @@ use crate::tools::ImageData;
 
 mod convert;
 
-use convert::{load_docx, load_image, load_pdf, load_text};
+use convert::{load_docx, load_image, load_pdf, load_text, resize_image};
 
 const MAX_IMAGE_DOWNLOAD: u32 = 20 * 1024 * 1024;
 const MAX_DOCUMENT_DOWNLOAD: u32 = 25 * 1024 * 1024;
@@ -31,6 +31,32 @@ pub async fn load(http: &Client, attachment: &Attachment, vision: bool) -> Loade
             reason: format!("{error:#}"),
         },
     }
+}
+
+pub async fn text(http: &Client, attachment: &Attachment) -> Result<String> {
+    if classify(attachment) == Kind::Image {
+        bail!("it is an image; save it with --output and look at it with view");
+    }
+    match load_inner(http, attachment, false).await? {
+        Loaded::Text { text, .. } => Ok(text),
+        Loaded::Image(_) | Loaded::Unsupported { .. } => bail!("unsupported file type"),
+    }
+}
+
+pub async fn download_original(http: &Client, attachment: &Attachment) -> Result<Vec<u8>> {
+    if attachment.size > MAX_DOCUMENT_DOWNLOAD {
+        bail!(
+            "file is larger than {} MiB",
+            MAX_DOCUMENT_DOWNLOAD / 1024 / 1024
+        );
+    }
+    download(http, &attachment.url, MAX_DOCUMENT_DOWNLOAD).await
+}
+
+pub async fn image_from_bytes(bytes: Vec<u8>) -> Result<ImageData> {
+    tokio::task::spawn_blocking(move || resize_image(&bytes))
+        .await
+        .context("image processing task failed")?
 }
 
 async fn load_inner(http: &Client, attachment: &Attachment, vision: bool) -> Result<Loaded> {

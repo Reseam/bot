@@ -1,0 +1,15 @@
+{
+  "name": "reseam-bot-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "just-bash": "3.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^7"
+  }
+}

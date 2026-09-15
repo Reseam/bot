@@ -12,7 +12,6 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::{info, warn};
 
 use crate::config::McpServerConfig;
-use crate::text::truncate_chars;
 use crate::tools::ToolOutput;
 
 use client::{call_peer, connect_client, convert_result, reconnectable, redact_error};
@@ -21,8 +20,6 @@ mod client;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-const TOOL_NAME_LIMIT: usize = 64;
-const SCHEMA_DESCRIPTION_LIMIT: usize = 1_000;
 
 type Client = RunningService<RoleClient, ()>;
 
@@ -48,10 +45,9 @@ struct ServerState {
 #[derive(Clone)]
 pub struct ExposedTool {
     pub server: String,
-    pub original_name: String,
     pub name: String,
     pub description: String,
-    pub parameters: Value,
+    pub input_schema: Value,
     pub approve: bool,
     pub timeout: Duration,
 }
@@ -87,6 +83,17 @@ impl Mcp {
         }))
         .await;
         mcp
+    }
+
+    pub fn tool(&self, server: &str, name: &str) -> Option<ExposedTool> {
+        self.servers
+            .get(server)?
+            .state
+            .read()
+            .tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .cloned()
     }
 
     pub fn tools(&self) -> Vec<ExposedTool> {
@@ -267,72 +274,18 @@ fn expose_tools(server: &str, config: &McpServerConfig, tools: Vec<McpTool>) -> 
                 .as_ref()
                 .is_none_or(|allowed| allowed.iter().any(|name| name == tool.name.as_ref()))
         })
-        .map(|tool| {
-            let original_name = tool.name.into_owned();
-            let name = sanitize_tool_name(server, &original_name);
-            let schema = Value::Object((*tool.input_schema).clone());
-            let (parameters, schema_note) = normalize_schema(schema);
-            let provided = tool
+        .map(|tool| ExposedTool {
+            server: server.to_owned(),
+            approve: config.approve.iter().any(|name| name == tool.name.as_ref()),
+            name: tool.name.into_owned(),
+            description: tool
                 .description
-                .as_deref()
-                .unwrap_or("Perform the provider-defined operation")
-                .split(['.', '!', '?'])
-                .next()
-                .unwrap_or("Perform the provider-defined operation")
-                .trim();
-            let mut use_sentence =
-                "Use this MCP tool when this server's capability is needed".to_owned();
-            if config.approve.contains(&original_name) {
-                use_sentence.push_str("; approval is required");
-            }
-            if let Some(note) = schema_note {
-                use_sentence.push_str("; its input schema was normalized from ");
-                use_sentence.push_str(&note.replace(['.', '!', '?'], ","));
-            }
-            let description = format!("[{server}] {provided}. {use_sentence}.");
-            ExposedTool {
-                server: server.to_owned(),
-                original_name: original_name.clone(),
-                name,
-                description,
-                parameters,
-                approve: config.approve.contains(&original_name),
-                timeout: Duration::from_secs(config.timeout_secs),
-            }
+                .map(|text| text.into_owned())
+                .unwrap_or_default(),
+            input_schema: Value::Object((*tool.input_schema).clone()),
+            timeout: Duration::from_secs(config.timeout_secs),
         })
         .collect()
-}
-
-fn normalize_schema(schema: Value) -> (Value, Option<String>) {
-    if schema.is_object() {
-        return (schema, None);
-    }
-    let note = truncate_chars(&schema.to_string(), SCHEMA_DESCRIPTION_LIMIT);
-    (
-        serde_json::json!({"type": "object", "properties": {}}),
-        Some(note),
-    )
-}
-
-fn sanitize_tool_name(server: &str, tool: &str) -> String {
-    let original = format!("{server}_{tool}");
-    let sanitized = original
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized.len() <= TOOL_NAME_LIMIT {
-        return sanitized;
-    }
-    let hash = original.bytes().fold(0x811c9dc5_u32, |hash, byte| {
-        (hash ^ u32::from(byte)).wrapping_mul(0x01000193)
-    });
-    format!("{}_{hash:08x}", &sanitized[..TOOL_NAME_LIMIT - 9])
 }
 
 #[cfg(test)]

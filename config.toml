@@ -12,7 +12,7 @@ team_role_ids = ["${DISCORD_TEAM_ROLE_ID}"]
 base_url = "${LLM_BASE_URL}"
 api_key = "${LLM_API_KEY}"
 model = "${LLM_MODEL}"
-context_window = 128000
+context_window = 1048576
 max_output_tokens = 16000
 vision = true
 
@@ -31,9 +31,8 @@ kind = "github"
 url = "https://api.github.com"
 token = "${GITHUB_TOKEN:-}"
 
-[shell]
-enabled = true
-timeout_secs = 120
+[sandbox]
+entry = "${SANDBOX_ENTRY:-sandbox/dist/main.js}"
 
 [mcp.exa]
 url = "https://mcp.exa.ai/mcp"

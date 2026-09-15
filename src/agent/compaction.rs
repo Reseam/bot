@@ -27,10 +27,12 @@ pub(super) async fn compact_if_needed(
     usage: Option<&ContextUsage>,
     settings: &CompactionSettings,
 ) -> Result<bool> {
-    let threshold = settings
-        .context_window
-        .saturating_sub(settings.max_output_tokens)
-        .saturating_sub(settings.reserve_tokens);
+    let threshold = settings.compact_at_tokens.min(
+        settings
+            .context_window
+            .saturating_sub(settings.max_output_tokens)
+            .saturating_sub(settings.reserve_tokens),
+    );
     if context_estimate(transcript, usage) <= threshold {
         return Ok(false);
     }

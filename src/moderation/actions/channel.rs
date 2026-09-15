@@ -1,24 +1,30 @@
-use std::time::Duration;
-
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use poise::serenity_prelude as serenity;
+use sqlx::SqlitePool;
 
-use super::{Action, Moderator, NewCase, Outcome, finish, require_actor_channel_permission};
-use crate::db::discord_id;
+use super::{post_log, require_channel_permission};
+use crate::db::{discord_id, stored_discord_id};
+use crate::discord::{History, is_thread};
+use crate::moderation::{
+    Action, Moderator, PurgeCandidate, Record, SavedOverwrite, is_staff_role, lock_plan,
+    purge_matches,
+};
 
-const MESSAGE_AGE_LIMIT: i64 = 14 * 24 * 60 * 60;
+const BULK_DELETE_AGE: i64 = 14 * 24 * 60 * 60;
+const MAX_SCANNED: usize = 1_000;
 
 pub async fn delete_message(
     moderator: &Moderator<'_>,
     channel_id: serenity::ChannelId,
     message_id: serenity::MessageId,
     reason: &str,
-) -> Result<Outcome> {
-    require_actor_channel_permission(
+) -> Result<()> {
+    require_channel_permission(
         moderator,
         channel_id,
         serenity::Permissions::MANAGE_MESSAGES,
-    )?;
+    )
+    .await?;
     let message = channel_id
         .message(moderator.discord, message_id)
         .await
@@ -27,178 +33,282 @@ pub async fn delete_message(
         .delete_message(moderator.discord, message_id)
         .await
         .context("failed to delete message")?;
-    let reason = moderator.reason(reason);
-    finish(
+    log(
         moderator,
-        NewCase {
-            action: Action::Purge,
-            target_id: Some(message.author.id),
-            channel_id: Some(channel_id),
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
+        Action::Delete,
+        Some(message.author.id),
+        channel_id,
+        &moderator.reason(reason),
     )
-    .await
+    .await;
+    Ok(())
 }
 
-pub async fn record_purge(
+pub async fn purge(
     moderator: &Moderator<'_>,
-    target: Option<serenity::UserId>,
     channel_id: serenity::ChannelId,
     count: usize,
-) -> Result<Outcome> {
-    let reason = moderator.reason(&format!("Deleted {count} messages"));
-    finish(
+    user: Option<serenity::UserId>,
+    contains: Option<&str>,
+    bots: Option<bool>,
+) -> Result<usize> {
+    require_channel_permission(
         moderator,
-        NewCase {
-            action: Action::Purge,
-            target_id: target,
-            channel_id: Some(channel_id),
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
+        channel_id,
+        serenity::Permissions::MANAGE_MESSAGES | serenity::Permissions::READ_MESSAGE_HISTORY,
     )
-    .await
+    .await?;
+    let cutoff = serenity::Timestamp::now().unix_timestamp() - BULK_DELETE_AGE;
+    let mut history = History::before(channel_id, None);
+    let mut matched = Vec::new();
+    let mut scanned = 0;
+    'pages: while scanned < MAX_SCANNED {
+        let page = history.next_page(moderator.discord).await?;
+        if page.is_empty() {
+            break;
+        }
+        for message in page {
+            scanned += 1;
+            if message.timestamp.unix_timestamp() <= cutoff {
+                break 'pages;
+            }
+            let candidate = PurgeCandidate {
+                author: message.author.id,
+                author_is_bot: message.author.bot,
+                content: &message.content,
+            };
+            if purge_matches(&candidate, user, contains, bots) {
+                matched.push(message.id);
+                if matched.len() == count {
+                    break 'pages;
+                }
+            }
+        }
+    }
+    for chunk in matched.chunks(100) {
+        channel_id
+            .delete_messages(moderator.discord, chunk)
+            .await
+            .context("failed to delete messages")?;
+    }
+    log(
+        moderator,
+        Action::Purge,
+        user,
+        channel_id,
+        &moderator.reason(&format!("Deleted {} messages", matched.len())),
+    )
+    .await;
+    Ok(matched.len())
 }
 
 pub async fn set_slowmode(
     moderator: &Moderator<'_>,
-    channel: &serenity::GuildChannel,
+    channel_id: serenity::ChannelId,
     seconds: u16,
-) -> Result<Outcome> {
-    require_actor_channel_permission(
+) -> Result<()> {
+    require_channel_permission(
         moderator,
-        channel.id,
+        channel_id,
         serenity::Permissions::MANAGE_CHANNELS,
-    )?;
-    channel
-        .id
+    )
+    .await?;
+    channel_id
         .edit(
             moderator.discord,
             serenity::EditChannel::new().rate_limit_per_user(seconds),
         )
         .await
         .context("failed to update channel slowmode")?;
-    let reason = moderator.reason(&format!("Set slowmode to {seconds} seconds"));
-    finish(
+    log(
         moderator,
-        NewCase {
-            action: Action::Slowmode,
-            target_id: None,
-            channel_id: Some(channel.id),
-            reason: &reason,
-            duration: Some(Duration::from_secs(u64::from(seconds))),
-            expires_at: None,
-            dm_delivered: None,
-        },
+        Action::Slowmode,
+        None,
+        channel_id,
+        &moderator.reason(&format!("Set slowmode to {seconds} seconds")),
     )
-    .await
+    .await;
+    Ok(())
 }
 
-pub async fn set_locked(
-    moderator: &Moderator<'_>,
-    channel: &serenity::GuildChannel,
-    locked: bool,
-    reason: &str,
-) -> Result<Outcome> {
-    require_actor_channel_permission(
-        moderator,
-        channel.id,
-        serenity::Permissions::MANAGE_CHANNELS,
-    )?;
-    let everyone = moderator.guild_id.everyone_role();
-    let current = channel
-        .permission_overwrites
-        .iter()
-        .find(|overwrite| overwrite.kind == serenity::PermissionOverwriteType::Role(everyone));
-    let overwrite = crate::moderation::update_everyone_overwrite(current, everyone, locked);
-    channel
-        .id
-        .create_permission(moderator.discord, overwrite)
-        .await
-        .context("failed to update channel permission overwrite")?;
-    let reason = moderator.reason(reason);
-    finish(
-        moderator,
-        NewCase {
-            action: if locked { Action::Lock } else { Action::Unlock },
-            target_id: None,
-            channel_id: Some(channel.id),
-            reason: &reason,
-            duration: None,
-            expires_at: None,
-            dm_delivered: None,
-        },
-    )
-    .await
-}
-
-pub async fn purge_messages(
+pub async fn lock(
     moderator: &Moderator<'_>,
     channel_id: serenity::ChannelId,
-    count: u8,
-    user: Option<serenity::UserId>,
-    contains: Option<&str>,
-    bots: Option<bool>,
-) -> Result<usize> {
-    require_actor_channel_permission(
+    reason: &str,
+) -> Result<()> {
+    let channel = require_channel_permission(
         moderator,
         channel_id,
-        serenity::Permissions::MANAGE_MESSAGES,
-    )?;
-    let cutoff = serenity::Timestamp::from_unix_timestamp(
-        serenity::Timestamp::now().unix_timestamp() - MESSAGE_AGE_LIMIT,
+        serenity::Permissions::MANAGE_CHANNELS,
     )
-    .context("message age cutoff is invalid")?;
-    let messages = channel_id
-        .messages(moderator.discord, serenity::GetMessages::new().limit(100))
-        .await
-        .context("failed to fetch messages for purge")?;
-    let ids = messages
-        .iter()
-        .filter(|message| {
-            crate::moderation::purge_matches(
-                crate::moderation::PurgeCandidate {
-                    timestamp: message.timestamp,
-                    author: message.author.id,
-                    author_is_bot: message.author.bot,
-                    content: &message.content,
-                },
-                user,
-                contains,
-                bots,
-                cutoff,
-            )
-        })
-        .take(usize::from(count))
-        .map(|message| message.id)
-        .collect::<Vec<_>>();
-    if !ids.is_empty() {
-        channel_id
-            .delete_messages(moderator.discord, &ids)
-            .await
-            .context("failed to purge messages")?;
+    .await?;
+    if is_thread(channel.kind) {
+        bail!("threads cannot be locked this way; lock the parent channel instead");
     }
-    Ok(ids.len())
+    if saved_overwrites(moderator.db, channel_id).await?.is_some() {
+        bail!("#{} is already locked", channel.name);
+    }
+    let everyone = moderator.guild_id.everyone_role();
+    let plan = {
+        let guild = moderator
+            .discord
+            .cache
+            .guild(moderator.guild_id)
+            .context("server is not available in the Discord cache")?;
+        lock_plan(&channel.permission_overwrites, everyone, |role| {
+            guild
+                .roles
+                .get(&role)
+                .is_some_and(|role| is_staff_role(role.permissions))
+        })
+    };
+    let saved = plan.iter().map(|(saved, _)| saved).collect::<Vec<_>>();
+    sqlx::query("INSERT INTO channel_locks (channel_id, guild_id, overwrites) VALUES (?, ?, ?)")
+        .bind(discord_id(channel_id.get())?)
+        .bind(discord_id(moderator.guild_id.get())?)
+        .bind(serde_json::to_string(&saved).context("failed to serialize channel permissions")?)
+        .execute(moderator.db)
+        .await
+        .context("failed to save channel permissions")?;
+    for (_, overwrite) in plan {
+        channel_id
+            .create_permission(moderator.discord, overwrite)
+            .await
+            .context("failed to update channel permissions")?;
+    }
+    log(
+        moderator,
+        Action::Lock,
+        None,
+        channel_id,
+        &moderator.reason(reason),
+    )
+    .await;
+    Ok(())
+}
+
+pub async fn unlock(
+    moderator: &Moderator<'_>,
+    channel_id: serenity::ChannelId,
+    reason: &str,
+) -> Result<()> {
+    let channel = require_channel_permission(
+        moderator,
+        channel_id,
+        serenity::Permissions::MANAGE_CHANNELS,
+    )
+    .await?;
+    let saved = saved_overwrites(moderator.db, channel_id)
+        .await?
+        .with_context(|| format!("#{} was not locked by the bot", channel.name))?;
+    for overwrite in saved {
+        let role = serenity::RoleId::new(overwrite.role);
+        match overwrite.original {
+            Some((allow, deny)) => {
+                channel_id
+                    .create_permission(
+                        moderator.discord,
+                        serenity::PermissionOverwrite {
+                            allow: serenity::Permissions::from_bits_retain(allow),
+                            deny: serenity::Permissions::from_bits_retain(deny),
+                            kind: serenity::PermissionOverwriteType::Role(role),
+                        },
+                    )
+                    .await
+            }
+            None => {
+                channel_id
+                    .delete_permission(
+                        moderator.discord,
+                        serenity::PermissionOverwriteType::Role(role),
+                    )
+                    .await
+            }
+        }
+        .context("failed to restore channel permissions")?;
+    }
+    sqlx::query("DELETE FROM channel_locks WHERE channel_id = ?")
+        .bind(discord_id(channel_id.get())?)
+        .execute(moderator.db)
+        .await
+        .context("failed to clear channel lock")?;
+    log(
+        moderator,
+        Action::Unlock,
+        None,
+        channel_id,
+        &moderator.reason(reason),
+    )
+    .await;
+    Ok(())
+}
+
+async fn saved_overwrites(
+    db: &SqlitePool,
+    channel_id: serenity::ChannelId,
+) -> Result<Option<Vec<SavedOverwrite>>> {
+    sqlx::query_scalar::<_, String>("SELECT overwrites FROM channel_locks WHERE channel_id = ?")
+        .bind(discord_id(channel_id.get())?)
+        .fetch_optional(db)
+        .await
+        .context("failed to read channel lock")?
+        .map(|json| serde_json::from_str(&json).context("invalid saved channel permissions"))
+        .transpose()
 }
 
 pub async fn set_mod_log(
-    db: &sqlx::SqlitePool,
+    db: &SqlitePool,
     guild_id: serenity::GuildId,
-    channel: serenity::ChannelId,
+    channel_id: serenity::ChannelId,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO guild_settings (guild_id, mod_log_channel_id) VALUES (?, ?) \
          ON CONFLICT(guild_id) DO UPDATE SET mod_log_channel_id = excluded.mod_log_channel_id",
     )
     .bind(discord_id(guild_id.get())?)
-    .bind(discord_id(channel.get())?)
+    .bind(discord_id(channel_id.get())?)
     .execute(db)
     .await
     .context("failed to save moderation log channel")?;
     Ok(())
+}
+
+pub async fn mod_log_channel(
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+) -> Result<Option<serenity::ChannelId>> {
+    sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT mod_log_channel_id FROM guild_settings WHERE guild_id = ?",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .fetch_optional(db)
+    .await
+    .context("failed to read moderation log channel")?
+    .flatten()
+    .map(|id| stored_discord_id(id).map(serenity::ChannelId::new))
+    .transpose()
+}
+
+async fn log(
+    moderator: &Moderator<'_>,
+    action: Action,
+    target: Option<serenity::UserId>,
+    channel_id: serenity::ChannelId,
+    reason: &str,
+) {
+    post_log(
+        moderator.discord,
+        moderator.db,
+        moderator.guild_id,
+        moderator.actor.user.id,
+        &Record {
+            action,
+            target,
+            channel: Some(channel_id),
+            reason,
+            duration: None,
+            expires_at: None,
+        },
+    )
+    .await;
 }

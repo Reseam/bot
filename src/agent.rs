@@ -17,6 +17,7 @@ use compaction::{ContextUsage, compact_if_needed};
 pub struct CompactionSettings {
     pub context_window: u64,
     pub max_output_tokens: u64,
+    pub compact_at_tokens: u64,
     pub reserve_tokens: u64,
     pub keep_recent_tokens: u64,
 }
@@ -24,15 +25,8 @@ pub struct CompactionSettings {
 pub enum AgentEvent {
     TurnStarted,
     Text(String),
-    ToolStarted {
-        id: String,
-        name: String,
-    },
-    ToolFinished {
-        id: String,
-        name: String,
-        is_error: bool,
-    },
+    ToolStarted { id: String },
+    ToolFinished { id: String, is_error: bool },
     Compacted,
 }
 
@@ -159,15 +153,12 @@ async fn execute_tools(
     events: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Option<Vec<ExecutedTool>> {
     let futures = calls.iter().map(|call| async move {
-        let name = call.function.name.clone();
         let _ = events.send(AgentEvent::ToolStarted {
             id: call.id.clone(),
-            name: name.clone(),
         });
         let result = execute_tool(tools, call).await;
         let _ = events.send(AgentEvent::ToolFinished {
             id: call.id.clone(),
-            name,
             is_error: result.is_err(),
         });
         ExecutedTool {

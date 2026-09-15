@@ -1,6 +1,6 @@
 # Reseam Bot
 
-Discord bot for the Reseam team with a native AI agent. Rust 2024, stable 1.94, poise 0.7 on serenity 0.12.
+Discord bot for the Reseam team with a native AI agent. Rust 2024, stable 1.94, poise 0.7 on serenity 0.12. The agent's only tool is `bash`, which runs in a just-bash sandbox hosted by the TypeScript service in `sandbox/` (Node 24, strict TypeScript). Bridge commands inside the sandbox call back into Rust over JSON lines on stdin/stdout.
 
 ## Rules
 
@@ -35,10 +35,10 @@ Code is reviewed line by line. Simple, flat, idiomatic Rust beats clever Rust.
 - User-facing Discord text: short, plain, no emoji spam, no em-dashes.
 
 ### API accuracy
-- Never guess a crate API. Read the source under `~/.cargo/registry/src/*/<crate>-<version>/` (poise-0.7.0, serenity-0.12.5, rmcp-3.3.0, sqlx-0.9.0, reqwest-0.13.5, schemars-1.x) before using it.
+- Never guess a crate API. Read the source under `~/.cargo/registry/src/*/<crate>-<version>/` (poise-0.7.0, serenity-0.12.5, rmcp-3.3.0, sqlx-0.9.0, reqwest-0.13.5, schemars-1.x, clap-4.6) before using it. For the sandbox, read the type definitions under `sandbox/node_modules/just-bash/dist/`.
 - Discord limits: message content 2000 chars, embed description 4096, 100 messages per history fetch, message edits are rate limited (throttle streaming edits to at most one per ~1.5s per message).
 
 ### Tests and verification
-- While iterating: `cargo check`. At the end of a task: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`. Report the real output.
-- Test pure logic that is easy to get wrong (splitting, truncation, parsing, config interpolation, the agent loop against a mock server). No tests that only restate the implementation.
+- While iterating: `cargo check`. At the end of a task: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `npm --prefix sandbox run build`. Report the real output.
+- Test pure logic that is easy to get wrong (splitting, truncation, config interpolation, the agent loop against a mock server, security boundaries). No tests that only restate the implementation or check serde and SQL plumbing.
 - Do not commit. Do not edit `.env`.

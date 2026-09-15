@@ -6,7 +6,6 @@ use image::{DynamicImage, GenericImageView, ImageBuffer, ImageFormat, Rgb};
 use zip::write::SimpleFileOptions;
 
 use super::convert::{extract_docx, resize_image};
-use super::looks_like_text;
 
 #[test]
 fn extracts_docx_paragraphs_tabs_and_breaks() -> Result<()> {
@@ -20,13 +19,6 @@ fn extracts_docx_paragraphs_tabs_and_breaks() -> Result<()> {
     }
     assert_eq!(extract_docx(&bytes)?, "Hello\tworld\nagain\nNext\n");
     Ok(())
-}
-
-#[test]
-fn detects_utf8_text_without_nul() {
-    assert!(looks_like_text("hello é".as_bytes()));
-    assert!(!looks_like_text(b"hello\0world"));
-    assert!(!looks_like_text(&[0xff, 0xfe]));
 }
 
 #[test]

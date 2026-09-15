@@ -1,3 +1,5 @@
 /target
 /data
 .env
+/sandbox/node_modules
+/sandbox/dist

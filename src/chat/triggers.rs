@@ -2,39 +2,18 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use poise::serenity_prelude as serenity;
-use tracing::debug;
+use tokio::sync::OwnedMutexGuard;
+use tracing::{debug, error};
 
-use super::{RunRequest, context, run};
+use super::{NewRun, RunRequest, context, run, start_new};
 use crate::access::is_team;
-use crate::conversations;
-use crate::{App, Data, Error};
+use crate::{App, conversations};
 
-pub async fn event_handler(
-    framework: poise::FrameworkContext<'_, Data, Error>,
-    event: &serenity::FullEvent,
-) -> Result<()> {
-    match event {
-        serenity::FullEvent::Message { new_message } => {
-            handle_message(
-                framework.user_data.clone(),
-                framework.serenity_context,
-                new_message,
-            )
-            .await
-        }
-        serenity::FullEvent::InteractionCreate { interaction } => {
-            if let Some(component) = interaction.as_message_component() {
-                handle_component(framework.user_data, framework.serenity_context, component)
-                    .await?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
+const QUEUED: &str = "⏳";
+const STEERED: &str = "👀";
 
-async fn handle_message(
-    app: Arc<App>,
+pub async fn handle_message(
+    app: &Arc<App>,
     discord: &serenity::Context,
     message: &serenity::Message,
 ) -> Result<()> {
@@ -47,9 +26,9 @@ async fn handle_message(
 
     let bot_id = discord.cache.current_user().id;
     let referenced = message.referenced_message.as_deref();
-    let direct_active = referenced.and_then(|message| app.runs.get(message.id));
-    let is_bot_reply = referenced.is_some_and(|message| message.author.id == bot_id);
-    if !message.mentions_user_id(bot_id) && !is_bot_reply && direct_active.is_none() {
+    let active = referenced.and_then(|referenced| app.runs.get(referenced.id));
+    let is_bot_reply = referenced.is_some_and(|referenced| referenced.author.id == bot_id);
+    if !message.mentions_user_id(bot_id) && !is_bot_reply && active.is_none() {
         return Ok(());
     }
     let roles = message
@@ -62,25 +41,19 @@ async fn handle_message(
         return Ok(());
     }
 
-    let conversation = match referenced {
-        Some(referenced) => conversations::find_by_message(&app.db, referenced.id).await?,
-        None => None,
+    let conversation_id = match (&active, referenced) {
+        (Some(run), _) => Some(run.conversation_id),
+        (None, Some(referenced)) => conversations::find_by_message(&app.db, referenced.id).await?,
+        (None, None) => None,
     };
-    let active = direct_active.or_else(|| {
-        conversation
-            .as_ref()
-            .and_then(|conversation| app.runs.get_conversation(conversation.id))
-    });
-
-    if let Some(handle) = active
-        && handle.invoker == message.author.id
+    if let Some(run) = conversation_id.and_then(|id| app.runs.get_conversation(id))
+        && run.invoker.user.id == message.author.id
     {
-        let steering =
-            context::steering_message(&app, &message.content, &message.attachments).await;
-        if handle.steering.send(steering).is_ok() {
-            app.runs.register_message(message.id, handle);
+        let steering = context::steering_message(app, &message.content, &message.attachments).await;
+        if run.steer(steering) {
+            app.runs.register_message(message.id, &run);
             message
-                .react(discord, serenity::ReactionType::Unicode("👀".to_owned()))
+                .react(discord, reaction(STEERED))
                 .await
                 .context("failed to acknowledge steering message")?;
         }
@@ -91,7 +64,98 @@ async fn handle_message(
         .member(discord)
         .await
         .context("failed to fetch message author member")?;
-    let input = context::ContextInput {
+    let input = context_input(message);
+    let Some(conversation_id) = conversation_id else {
+        return start_new(
+            app,
+            discord,
+            NewRun {
+                guild_id,
+                channel_id: message.channel_id,
+                invoker: member,
+                include_history: true,
+                input,
+            },
+        )
+        .await;
+    };
+
+    let lock = app.runs.try_lock(conversation_id);
+    if lock.is_none() {
+        message
+            .react(discord, reaction(QUEUED))
+            .await
+            .context("failed to mark queued message")?;
+    }
+    let (app, discord, message) = (app.clone(), discord.clone(), message.clone());
+    tokio::spawn(async move {
+        if let Err(error) =
+            continue_conversation(&app, &discord, &message, member, conversation_id, lock).await
+        {
+            error!(error = %format!("{error:#}"), conversation_id, "failed to continue conversation");
+        }
+    });
+    Ok(())
+}
+
+async fn continue_conversation(
+    app: &Arc<App>,
+    discord: &serenity::Context,
+    message: &serenity::Message,
+    member: serenity::Member,
+    conversation_id: i64,
+    lock: Option<OwnedMutexGuard<()>>,
+) -> Result<()> {
+    let lock = match lock {
+        Some(lock) => lock,
+        None => {
+            let lock = app.runs.lock(conversation_id).await;
+            message
+                .delete_reaction(discord, None, reaction(QUEUED))
+                .await
+                .context("failed to clear queued marker")?;
+            lock
+        }
+    };
+    let guild_id = message
+        .guild_id
+        .context("continued conversation message has no guild")?;
+    let conversation = conversations::load(&app.db, conversation_id).await?;
+    let last_message_id = conversation
+        .last_message_id
+        .context("continued conversation has no mapped Discord messages")?;
+    let mut transcript = conversation.transcript;
+    transcript.push(
+        context::continue_conversation(
+            app,
+            discord,
+            guild_id,
+            message.channel_id,
+            &member,
+            last_message_id,
+            context_input(message),
+        )
+        .await?,
+    );
+    run(
+        app.clone(),
+        discord.clone(),
+        RunRequest {
+            conversation_id,
+            lock,
+            guild_id,
+            channel_id: message.channel_id,
+            reply_to: message.id,
+            invoker: member,
+            transcript,
+        },
+    )
+    .await;
+    Ok(())
+}
+
+fn context_input(message: &serenity::Message) -> context::ContextInput {
+    context::ContextInput {
         before: message.id,
         addressed_id: message.id,
         timestamp: message.timestamp,
@@ -99,55 +163,14 @@ async fn handle_message(
         mentions: message.mentions.clone(),
         attachments: message.attachments.clone(),
         referenced: message.referenced_message.clone(),
-    };
-    let (conversation_id, transcript) = match conversation {
-        Some(mut conversation) => {
-            let last_message_id = conversations::last_message_id(&app.db, conversation.id)
-                .await?
-                .context("continued conversation has no mapped Discord messages")?;
-            conversation.transcript.push(
-                context::continue_conversation(
-                    &app,
-                    discord,
-                    guild_id,
-                    message.channel_id,
-                    &member,
-                    last_message_id,
-                    input,
-                )
-                .await?,
-            );
-            (Some(conversation.id), conversation.transcript)
-        }
-        None => (
-            None,
-            context::build(
-                &app,
-                discord,
-                guild_id,
-                message.channel_id,
-                &member,
-                true,
-                input,
-            )
-            .await?,
-        ),
-    };
-    let request = RunRequest {
-        channel_id: message.channel_id,
-        guild_id,
-        reply_to: message.id,
-        invoker: member,
-        transcript,
-        conversation_id,
-        message_ids: vec![message.id],
-    };
-    let discord = discord.clone();
-    tokio::spawn(async move { run(app, discord, request).await });
-    Ok(())
+    }
 }
 
-async fn handle_component(
+fn reaction(emoji: &str) -> serenity::ReactionType {
+    serenity::ReactionType::Unicode(emoji.to_owned())
+}
+
+pub async fn handle_component(
     app: &Arc<App>,
     discord: &serenity::Context,
     interaction: &serenity::ComponentInteraction,
@@ -175,8 +198,8 @@ async fn handle_component(
     let Ok(id) = raw_id.parse::<u64>() else {
         return Ok(());
     };
-    if let Some(handle) = app.runs.get(serenity::MessageId::new(id)) {
-        handle.cancel.cancel();
+    if let Some(run) = app.runs.get(serenity::MessageId::new(id)) {
+        run.cancel.cancel();
     }
     interaction
         .defer(discord)

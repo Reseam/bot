@@ -26,8 +26,7 @@ pub struct Config {
     pub agent: AgentConfig,
     #[serde(default)]
     pub forges: BTreeMap<String, ForgeConfig>,
-    #[serde(default)]
-    pub shell: ShellConfig,
+    pub sandbox: SandboxConfig,
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
 }
@@ -71,19 +70,9 @@ pub struct ForgeConfig {
 }
 
 #[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ShellConfig {
-    pub enabled: bool,
-    pub timeout_secs: u64,
-}
-
-impl Default for ShellConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            timeout_secs: 120,
-        }
-    }
+#[serde(deny_unknown_fields)]
+pub struct SandboxConfig {
+    pub entry: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +113,7 @@ pub struct AgentConfig {
     pub max_turns: u32,
     pub history_messages: u8,
     pub conversation_retention_days: u32,
+    pub compact_at_tokens: u64,
     pub compaction_reserve_tokens: u64,
     pub keep_recent_tokens: u64,
 }
@@ -134,6 +124,7 @@ impl Default for AgentConfig {
             max_turns: 40,
             history_messages: 30,
             conversation_retention_days: 30,
+            compact_at_tokens: 500_000,
             compaction_reserve_tokens: 16_384,
             keep_recent_tokens: 20_000,
         }
@@ -155,12 +146,11 @@ impl Config {
             .parse::<toml::Table>()
             .with_context(|| format!("failed to parse configuration from {}", path.display()))?;
         interpolate_table(&mut table, &|name| env::var(name), "")?;
-        let config: Self = table
+        let mut config: Self = table
             .try_into()
             .with_context(|| format!("invalid configuration in {}", path.display()))?;
-        if !(1..=600).contains(&config.shell.timeout_secs) {
-            bail!("shell.timeout_secs must be between 1 and 600")
-        }
+        config.data_dir = std::path::absolute(&config.data_dir)
+            .context("failed to resolve data_dir to an absolute path")?;
         for (name, server) in &config.mcp {
             server.validate(name)?;
         }

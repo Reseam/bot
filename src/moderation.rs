@@ -7,20 +7,30 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use tracing::error;
 
+use crate::db::{discord_id, stored_discord_id};
+use crate::discord::{UNKNOWN_BAN, error_code};
+
 pub mod actions;
 pub mod commands;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
+const SEND_PERMISSIONS: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
+    .union(serenity::Permissions::SEND_MESSAGES_IN_THREADS)
+    .union(serenity::Permissions::CREATE_PUBLIC_THREADS)
+    .union(serenity::Permissions::CREATE_PRIVATE_THREADS);
+const STAFF_PERMISSIONS: serenity::Permissions = serenity::Permissions::ADMINISTRATOR
+    .union(serenity::Permissions::MANAGE_CHANNELS)
+    .union(serenity::Permissions::MANAGE_MESSAGES)
+    .union(serenity::Permissions::MODERATE_MEMBERS);
+
+#[derive(Clone, Copy)]
 pub enum Action {
     Warn,
-    Note,
     Timeout,
     Untimeout,
     Kick,
     Ban,
     Unban,
+    Delete,
     Purge,
     Slowmode,
     Lock,
@@ -30,17 +40,17 @@ pub enum Action {
 impl fmt::Display for Action {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Warn => "warn",
-            Self::Note => "note",
-            Self::Timeout => "timeout",
-            Self::Untimeout => "untimeout",
-            Self::Kick => "kick",
-            Self::Ban => "ban",
-            Self::Unban => "unban",
-            Self::Purge => "purge",
-            Self::Slowmode => "slowmode",
-            Self::Lock => "lock",
-            Self::Unlock => "unlock",
+            Self::Warn => "Warn",
+            Self::Timeout => "Timeout",
+            Self::Untimeout => "Remove timeout",
+            Self::Kick => "Kick",
+            Self::Ban => "Ban",
+            Self::Unban => "Unban",
+            Self::Delete => "Delete message",
+            Self::Purge => "Purge",
+            Self::Slowmode => "Slowmode",
+            Self::Lock => "Lock",
+            Self::Unlock => "Unlock",
         })
     }
 }
@@ -66,107 +76,125 @@ impl Moderator<'_> {
     }
 }
 
-#[derive(Clone, Debug, FromRow)]
-pub struct Case {
-    pub id: i64,
-    pub guild_id: i64,
+pub struct Record<'a> {
     pub action: Action,
-    pub target_id: Option<i64>,
-    pub channel_id: Option<i64>,
-    pub moderator_id: i64,
-    pub reason: String,
-    pub duration_secs: Option<i64>,
-    pub expires_at: Option<i64>,
-    pub resolved: bool,
-    pub created_at: i64,
-}
-
-pub struct NewCase<'a> {
-    pub action: Action,
-    pub target_id: Option<serenity::UserId>,
-    pub channel_id: Option<serenity::ChannelId>,
+    pub target: Option<serenity::UserId>,
+    pub channel: Option<serenity::ChannelId>,
     pub reason: &'a str,
     pub duration: Option<Duration>,
     pub expires_at: Option<i64>,
-    pub dm_delivered: Option<bool>,
 }
 
-pub async fn insert_case(
-    db: &SqlitePool,
-    guild_id: serenity::GuildId,
-    moderator_id: serenity::UserId,
-    case: &NewCase<'_>,
-) -> Result<Case> {
-    let now = serenity::Timestamp::now().unix_timestamp();
-    let duration_secs = case
-        .duration
-        .map(|duration| i64::try_from(duration.as_secs()).context("duration is too large"))
-        .transpose()?;
-    sqlx::query_as(
-        "INSERT INTO mod_cases (guild_id, action, target_id, channel_id, moderator_id, reason, \
-         duration_secs, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
-    )
-    .bind(crate::db::discord_id(guild_id.get())?)
-    .bind(case.action)
-    .bind(
-        case.target_id
-            .map(|id| crate::db::discord_id(id.get()))
-            .transpose()?,
-    )
-    .bind(
-        case.channel_id
-            .map(|id| crate::db::discord_id(id.get()))
-            .transpose()?,
-    )
-    .bind(crate::db::discord_id(moderator_id.get())?)
-    .bind(case.reason)
-    .bind(duration_secs)
-    .bind(case.expires_at)
-    .bind(now)
-    .fetch_one(db)
-    .await
-    .context("failed to record moderation case")
+pub fn hierarchy_allows(actor_position: u16, target_position: u16, actor_is_owner: bool) -> bool {
+    actor_is_owner || actor_position > target_position
 }
 
-pub async fn case_by_id(
+pub struct PurgeCandidate<'a> {
+    pub author: serenity::UserId,
+    pub author_is_bot: bool,
+    pub content: &'a str,
+}
+
+pub fn purge_matches(
+    candidate: &PurgeCandidate<'_>,
+    user: Option<serenity::UserId>,
+    contains: Option<&str>,
+    bots: Option<bool>,
+) -> bool {
+    user.is_none_or(|id| candidate.author == id)
+        && contains.is_none_or(|text| candidate.content.contains(text))
+        && bots.is_none_or(|want_bots| candidate.author_is_bot == want_bots)
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedOverwrite {
+    pub role: u64,
+    pub original: Option<(u64, u64)>,
+}
+
+pub fn lock_plan(
+    overwrites: &[serenity::PermissionOverwrite],
+    everyone: serenity::RoleId,
+    is_staff: impl Fn(serenity::RoleId) -> bool,
+) -> Vec<(SavedOverwrite, serenity::PermissionOverwrite)> {
+    let existing = overwrites
+        .iter()
+        .find(|overwrite| overwrite.kind == serenity::PermissionOverwriteType::Role(everyone));
+    let mut locked = existing.cloned().unwrap_or(serenity::PermissionOverwrite {
+        allow: serenity::Permissions::empty(),
+        deny: serenity::Permissions::empty(),
+        kind: serenity::PermissionOverwriteType::Role(everyone),
+    });
+    locked.allow.remove(SEND_PERMISSIONS);
+    locked.deny.insert(SEND_PERMISSIONS);
+    let mut plan = vec![(
+        SavedOverwrite {
+            role: everyone.get(),
+            original: existing.map(|overwrite| (overwrite.allow.bits(), overwrite.deny.bits())),
+        },
+        locked,
+    )];
+    for overwrite in overwrites {
+        let serenity::PermissionOverwriteType::Role(role) = overwrite.kind else {
+            continue;
+        };
+        if role == everyone || is_staff(role) || !overwrite.allow.intersects(SEND_PERMISSIONS) {
+            continue;
+        }
+        let mut locked = overwrite.clone();
+        locked.allow.remove(SEND_PERMISSIONS);
+        plan.push((
+            SavedOverwrite {
+                role: role.get(),
+                original: Some((overwrite.allow.bits(), overwrite.deny.bits())),
+            },
+            locked,
+        ));
+    }
+    plan
+}
+
+pub fn is_staff_role(permissions: serenity::Permissions) -> bool {
+    permissions.intersects(STAFF_PERMISSIONS)
+}
+
+pub async fn set_temp_ban(
     db: &SqlitePool,
     guild_id: serenity::GuildId,
-    id: i64,
-) -> Result<Option<Case>> {
-    sqlx::query_as("SELECT * FROM mod_cases WHERE guild_id = ? AND id = ?")
-        .bind(crate::db::discord_id(guild_id.get())?)
-        .bind(id)
-        .fetch_optional(db)
+    user_id: serenity::UserId,
+    expires_at: Option<i64>,
+) -> Result<()> {
+    let query = match expires_at {
+        Some(expires_at) => sqlx::query(
+            "INSERT INTO temp_bans (guild_id, user_id, expires_at) VALUES (?, ?, ?) \
+             ON CONFLICT(guild_id, user_id) DO UPDATE SET expires_at = excluded.expires_at",
+        )
+        .bind(discord_id(guild_id.get())?)
+        .bind(discord_id(user_id.get())?)
+        .bind(expires_at),
+        None => sqlx::query("DELETE FROM temp_bans WHERE guild_id = ? AND user_id = ?")
+            .bind(discord_id(guild_id.get())?)
+            .bind(discord_id(user_id.get())?),
+    };
+    query
+        .execute(db)
         .await
-        .context("failed to read moderation case")
+        .context("failed to update temporary ban")?;
+    Ok(())
 }
 
-pub async fn cases_for(
-    db: &SqlitePool,
-    guild_id: serenity::GuildId,
-    target_id: serenity::UserId,
-) -> Result<Vec<Case>> {
-    sqlx::query_as(
-        "SELECT * FROM mod_cases WHERE guild_id = ? AND target_id = ? \
-         ORDER BY id DESC LIMIT 25",
-    )
-    .bind(crate::db::discord_id(guild_id.get())?)
-    .bind(crate::db::discord_id(target_id.get())?)
-    .fetch_all(db)
-    .await
-    .context("failed to list moderation cases")
+#[derive(FromRow)]
+struct TempBan {
+    guild_id: i64,
+    user_id: i64,
 }
 
-pub async fn expired_bans(db: &SqlitePool, now: i64) -> Result<Vec<Case>> {
-    sqlx::query_as(
-        "SELECT * FROM mod_cases WHERE action = ? AND expires_at <= ? AND resolved = 0 \
-         ORDER BY expires_at",
-    )
-    .bind(Action::Ban)
-    .bind(now)
-    .fetch_all(db)
-    .await
-    .context("failed to find expired temporary bans")
+async fn due_temp_bans(db: &SqlitePool, now: i64) -> Result<Vec<TempBan>> {
+    sqlx::query_as("SELECT guild_id, user_id FROM temp_bans WHERE expires_at <= ?")
+        .bind(now)
+        .fetch_all(db)
+        .await
+        .context("failed to find expired temporary bans")
 }
 
 pub fn spawn_expired_bans(discord: serenity::Context, db: SqlitePool) {
@@ -175,93 +203,45 @@ pub fn spawn_expired_bans(discord: serenity::Context, db: SqlitePool) {
         loop {
             interval.tick().await;
             if let Err(error) = process_expired_bans(&discord, &db).await {
-                error!(?error, "failed to process expired temporary bans");
+                error!(error = %format!("{error:#}"), "failed to process expired temporary bans");
             }
         }
     });
 }
 
 async fn process_expired_bans(discord: &serenity::Context, db: &SqlitePool) -> Result<()> {
-    let cases = expired_bans(db, serenity::Timestamp::now().unix_timestamp()).await?;
     let bot_id = discord.cache.current_user().id;
-    for case in cases {
-        let guild_id = serenity::GuildId::new(crate::db::stored_discord_id(case.guild_id)?);
-        let target_id = serenity::UserId::new(crate::db::stored_discord_id(
-            case.target_id.context("expired ban case has no target")?,
-        )?);
-        if let Err(error) = guild_id.unban(discord, target_id).await {
-            error!(?error, case_id = case.id, %guild_id, %target_id, "failed to expire temporary ban");
-            continue;
+    for ban in due_temp_bans(db, serenity::Timestamp::now().unix_timestamp()).await? {
+        let guild_id = serenity::GuildId::new(stored_discord_id(ban.guild_id)?);
+        let user_id = serenity::UserId::new(stored_discord_id(ban.user_id)?);
+        match guild_id.unban(discord, user_id).await {
+            Ok(()) => {
+                set_temp_ban(db, guild_id, user_id, None).await?;
+                actions::post_log(
+                    discord,
+                    db,
+                    guild_id,
+                    bot_id,
+                    &Record {
+                        action: Action::Unban,
+                        target: Some(user_id),
+                        channel: None,
+                        reason: "Temporary ban expired",
+                        duration: None,
+                        expires_at: None,
+                    },
+                )
+                .await;
+            }
+            Err(error) if error_code(&error) == Some(UNKNOWN_BAN) => {
+                set_temp_ban(db, guild_id, user_id, None).await?;
+            }
+            Err(error) => {
+                error!(?error, %guild_id, %user_id, "failed to lift expired temporary ban");
+            }
         }
-        sqlx::query("UPDATE mod_cases SET resolved = 1 WHERE id = ?")
-            .bind(case.id)
-            .execute(db)
-            .await
-            .context("failed to resolve expired ban case")?;
-        let unban = insert_case(
-            db,
-            guild_id,
-            bot_id,
-            &NewCase {
-                action: Action::Unban,
-                target_id: Some(target_id),
-                channel_id: None,
-                reason: "Temporary ban expired",
-                duration: None,
-                expires_at: None,
-                dm_delivered: None,
-            },
-        )
-        .await?;
-        actions::post_log(discord, db, &unban).await;
     }
     Ok(())
-}
-
-pub fn hierarchy_allows(actor_position: u16, target_position: u16, actor_is_owner: bool) -> bool {
-    actor_is_owner || actor_position > target_position
-}
-
-pub struct PurgeCandidate<'a> {
-    pub timestamp: serenity::Timestamp,
-    pub author: serenity::UserId,
-    pub author_is_bot: bool,
-    pub content: &'a str,
-}
-
-pub fn purge_matches(
-    candidate: PurgeCandidate<'_>,
-    user: Option<serenity::UserId>,
-    contains: Option<&str>,
-    bots: Option<bool>,
-    cutoff: serenity::Timestamp,
-) -> bool {
-    candidate.timestamp > cutoff
-        && user.is_none_or(|id| candidate.author == id)
-        && contains.is_none_or(|text| candidate.content.contains(text))
-        && bots.is_none_or(|want_bots| candidate.author_is_bot == want_bots)
-}
-
-pub fn update_everyone_overwrite(
-    overwrite: Option<&serenity::PermissionOverwrite>,
-    everyone: serenity::RoleId,
-    locked: bool,
-) -> serenity::PermissionOverwrite {
-    let blocked = serenity::Permissions::SEND_MESSAGES
-        | serenity::Permissions::SEND_MESSAGES_IN_THREADS
-        | serenity::Permissions::CREATE_PUBLIC_THREADS
-        | serenity::Permissions::CREATE_PRIVATE_THREADS;
-    let mut updated = overwrite.cloned().unwrap_or(serenity::PermissionOverwrite {
-        allow: serenity::Permissions::empty(),
-        deny: serenity::Permissions::empty(),
-        kind: serenity::PermissionOverwriteType::Role(everyone),
-    });
-    if locked {
-        updated.deny.insert(blocked);
-    } else {
-        updated.deny.remove(blocked);
-    }
-    updated
 }
 
 #[cfg(test)]

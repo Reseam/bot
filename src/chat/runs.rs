@@ -1,81 +1,74 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use poise::serenity_prelude as serenity;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use tokio::sync::OwnedMutexGuard;
 
-use crate::llm::Message;
+use super::Run;
+use crate::locks::KeyedLocks;
 
-pub struct RunHandle {
-    pub cancel: CancellationToken,
-    pub steering: mpsc::UnboundedSender<Message>,
-    pub invoker: serenity::UserId,
-    message_ids: Mutex<HashSet<serenity::MessageId>>,
-}
-
-impl RunHandle {
-    pub fn new(
-        cancel: CancellationToken,
-        steering: mpsc::UnboundedSender<Message>,
-        invoker: serenity::UserId,
-    ) -> Self {
-        Self {
-            cancel,
-            steering,
-            invoker,
-            message_ids: Mutex::new(HashSet::new()),
-        }
-    }
-
-    pub fn record(&self, message_id: serenity::MessageId) {
-        self.message_ids.lock().insert(message_id);
-    }
-
-    pub fn message_ids(&self) -> Vec<serenity::MessageId> {
-        let mut message_ids = self.message_ids.lock().iter().copied().collect::<Vec<_>>();
-        message_ids.sort_unstable();
-        message_ids
-    }
+#[derive(Default)]
+struct ActiveRuns {
+    messages: HashMap<serenity::MessageId, Arc<Run>>,
+    conversations: HashMap<i64, Arc<Run>>,
 }
 
 #[derive(Default)]
-struct RunMaps {
-    messages: HashMap<serenity::MessageId, Arc<RunHandle>>,
-    conversations: HashMap<i64, Arc<RunHandle>>,
+pub struct Runs {
+    active: Mutex<ActiveRuns>,
+    locks: KeyedLocks<i64>,
 }
-
-#[derive(Default)]
-pub struct Runs(Mutex<RunMaps>);
 
 impl Runs {
-    pub fn get(&self, message_id: serenity::MessageId) -> Option<Arc<RunHandle>> {
-        self.0.lock().messages.get(&message_id).cloned()
+    pub fn get(&self, message_id: serenity::MessageId) -> Option<Arc<Run>> {
+        self.active.lock().messages.get(&message_id).cloned()
     }
 
-    pub fn get_conversation(&self, conversation_id: i64) -> Option<Arc<RunHandle>> {
-        self.0.lock().conversations.get(&conversation_id).cloned()
+    pub fn get_conversation(&self, conversation_id: i64) -> Option<Arc<Run>> {
+        self.active
+            .lock()
+            .conversations
+            .get(&conversation_id)
+            .cloned()
     }
 
-    pub fn register_message(&self, message_id: serenity::MessageId, handle: Arc<RunHandle>) {
-        handle.record(message_id);
-        self.0.lock().messages.insert(message_id, handle);
+    pub fn start(&self, run: &Arc<Run>) {
+        self.active
+            .lock()
+            .conversations
+            .insert(run.conversation_id, run.clone());
     }
 
-    pub fn register_conversation(&self, conversation_id: i64, handle: Arc<RunHandle>) {
-        self.0.lock().conversations.insert(conversation_id, handle);
+    pub fn register_message(&self, message_id: serenity::MessageId, run: &Arc<Run>) {
+        run.message_ids.lock().insert(message_id);
+        self.active.lock().messages.insert(message_id, run.clone());
     }
 
-    pub fn remove(&self, handle: &Arc<RunHandle>) {
-        let mut runs = self.0.lock();
-        runs.messages.retain(|_, value| !Arc::ptr_eq(value, handle));
-        runs.conversations
-            .retain(|_, value| !Arc::ptr_eq(value, handle));
+    pub fn remove(&self, run: &Arc<Run>) {
+        let mut active = self.active.lock();
+        active.messages.retain(|_, value| !Arc::ptr_eq(value, run));
+        active
+            .conversations
+            .retain(|_, value| !Arc::ptr_eq(value, run));
     }
 
     pub fn cancel_all(&self) {
-        let handles = self.0.lock().messages.values().cloned().collect::<Vec<_>>();
-        handles.iter().for_each(|handle| handle.cancel.cancel());
+        let runs = self
+            .active
+            .lock()
+            .conversations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.iter().for_each(|run| run.cancel.cancel());
+    }
+
+    pub fn try_lock(&self, conversation_id: i64) -> Option<OwnedMutexGuard<()>> {
+        self.locks.try_lock(&conversation_id)
+    }
+
+    pub async fn lock(&self, conversation_id: i64) -> OwnedMutexGuard<()> {
+        self.locks.lock(&conversation_id).await
     }
 }

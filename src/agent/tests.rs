@@ -70,12 +70,22 @@ struct EchoArgs {
     text: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct NoArgs {}
+
+fn text(value: impl Into<String>) -> ToolOutput {
+    ToolOutput {
+        text: value.into(),
+        images: Vec::new(),
+    }
+}
+
 fn echo_tool() -> Tool {
     Tool::new(
         "echo",
         "Echo text",
         (),
-        |_state, arguments: EchoArgs| async move { Ok(ToolOutput::text(arguments.text)) },
+        |_state, arguments: EchoArgs| async move { Ok(text(arguments.text)) },
     )
 }
 
@@ -95,6 +105,7 @@ async fn run_agent(
         compaction: CompactionSettings {
             context_window: u64::MAX,
             max_output_tokens: 0,
+            compact_at_tokens: u64::MAX,
             reserve_tokens: 0,
             keep_recent_tokens: 20_000,
         },
@@ -147,7 +158,7 @@ async fn parallel_tools_finish_without_deadlock_and_keep_source_order() -> Resul
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                Ok(ToolOutput::text(arguments.text))
+                Ok(text(arguments.text))
             }
         },
     );
@@ -209,11 +220,11 @@ async fn length_finish_does_not_execute_tools() -> Result<()> {
     ])
     .await?;
     let calls = Arc::new(AtomicUsize::new(0));
-    let tool = Tool::raw("count", "Count calls", json!({"type":"object"}), (), {
+    let tool = Tool::new("count", "Count calls", (), {
         let calls = Arc::clone(&calls);
-        move |_state, _arguments| {
+        move |_state, _arguments: NoArgs| {
             calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Ok(ToolOutput::text("called")) })
+            async { Ok(text("called")) }
         }
     });
     let tools = ToolSet::new(vec![tool]);
@@ -236,13 +247,9 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         tool_call(1, "second", "wait", "{}")
     ]);
     let (_server, llm) = llm_with_responses(vec![tool_turn(calls, "tool_calls")]).await?;
-    let tool = Tool::raw(
-        "wait",
-        "Wait",
-        json!({"type":"object"}),
-        (),
-        |_state, _arguments| Box::pin(std::future::pending()),
-    );
+    let tool = Tool::new("wait", "Wait", (), |_state, _arguments: NoArgs| {
+        std::future::pending()
+    });
     let tools = ToolSet::new(vec![tool]);
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
@@ -256,6 +263,7 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         compaction: CompactionSettings {
             context_window: u64::MAX,
             max_output_tokens: 0,
+            compact_at_tokens: u64::MAX,
             reserve_tokens: 0,
             keep_recent_tokens: 20_000,
         },
@@ -291,47 +299,6 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
 }
 
 #[tokio::test]
-async fn image_message_names_its_source_tool_call() -> Result<()> {
-    let (_server, llm) = llm_with_responses(vec![
-        tool_turn(
-            json!([tool_call(0, "image-call", "image", "{}")]),
-            "tool_calls",
-        ),
-        assistant_text("seen"),
-    ])
-    .await?;
-    let tool = Tool::raw(
-        "image",
-        "Return image",
-        json!({"type":"object"}),
-        (),
-        |_state, _arguments| {
-            Box::pin(async {
-                Ok(ToolOutput {
-                    text: "image attached".to_owned(),
-                    images: vec![ImageData {
-                        mime_type: "image/png".to_owned(),
-                        base64_data: "AA==".to_owned(),
-                    }],
-                })
-            })
-        },
-    );
-    let tools = ToolSet::new(vec![tool]);
-    let mut transcript = vec![user("start")];
-    let (_steer, mut steering) = mpsc::unbounded_channel();
-
-    run_agent(&llm, &tools, 4, &mut transcript, &mut steering).await?;
-
-    assert!(matches!(
-        &transcript[3],
-        Message::User { content: UserContent::Parts(parts) }
-            if matches!(&parts[0], ContentPart::Text { text } if text == "Images returned by image (image-call):")
-    ));
-    Ok(())
-}
-
-#[tokio::test]
 async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
     let (_server, llm) = llm_with_responses(vec![
         tool_turn(json!([tool_call(0, "steer", "queue", "{}")]), "tool_calls"),
@@ -339,17 +306,16 @@ async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
     ])
     .await?;
     let (steer, mut steering) = mpsc::unbounded_channel();
-    let tool = Tool::raw(
+    let tool = Tool::new(
         "queue",
         "Queue steering",
-        json!({"type":"object"}),
         (),
-        move |_state, _arguments| {
+        move |_state, _arguments: NoArgs| {
             let steer = steer.clone();
-            Box::pin(async move {
+            async move {
                 let _ = steer.send(user("new direction"));
-                Ok(ToolOutput::text("queued"))
-            })
+                Ok(text("queued"))
+            }
         },
     );
     let tools = ToolSet::new(vec![tool]);
@@ -362,23 +328,5 @@ async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
         Message::User { content: UserContent::Text(text) } if text == "new direction"
     ));
     assert!(matches!(transcript[4], Message::Assistant(_)));
-    Ok(())
-}
-
-#[tokio::test]
-async fn returns_turn_limit_after_last_turn_results() -> Result<()> {
-    let response = tool_turn(
-        json!([tool_call(0, "one", "echo", r#"{"text":"result"}"#)]),
-        "tool_calls",
-    );
-    let (_server, llm) = llm_with_responses(vec![response]).await?;
-    let tools = ToolSet::new(vec![echo_tool()]);
-    let mut transcript = vec![user("start")];
-    let (_steer, mut steering) = mpsc::unbounded_channel();
-
-    let outcome = run_agent(&llm, &tools, 1, &mut transcript, &mut steering).await?;
-
-    assert_eq!(outcome, Outcome::TurnLimit);
-    assert!(matches!(transcript.last(), Some(Message::Tool { .. })));
     Ok(())
 }

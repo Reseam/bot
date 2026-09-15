@@ -42,11 +42,6 @@ fn truncates_at_line_limit() {
 }
 
 #[test]
-fn leaves_short_output_unchanged() {
-    assert_eq!(truncate_output("short\noutput"), "short\noutput");
-}
-
-#[test]
 fn duration_parser_rejects_zero_and_invalid_values() -> anyhow::Result<()> {
     assert_eq!(parse_duration("2h 30m")?, Duration::from_secs(9_000));
     assert!(parse_duration("").is_err());

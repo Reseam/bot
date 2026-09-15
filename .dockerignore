@@ -1,4 +1,6 @@
-.git
-.env
 target
 data
+.env
+.git
+sandbox/node_modules
+sandbox/dist

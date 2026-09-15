@@ -2,19 +2,25 @@ mod access;
 mod agent;
 mod attachments;
 mod chat;
+mod cleanup;
+mod cli;
 mod commands;
 mod config;
 mod conversations;
 mod db;
+mod discord;
 mod forge;
 mod llm;
+mod locks;
 mod mcp;
 mod moderation;
+mod sandbox;
 #[cfg(test)]
 mod test_support;
 mod text;
 mod tools;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -25,7 +31,8 @@ use tracing_subscriber::EnvFilter;
 use crate::chat::Runs;
 use crate::config::Config;
 use crate::llm::Llm;
-use crate::tools::repo::RepoLocks;
+use crate::locks::KeyedLocks;
+use crate::sandbox::Sandbox;
 
 pub type Error = anyhow::Error;
 pub type Data = Arc<App>;
@@ -36,9 +43,10 @@ pub struct App {
     pub llm: Llm,
     pub http: reqwest::Client,
     pub runs: Runs,
-    pub forges: std::collections::BTreeMap<String, forge::Forge>,
-    pub repo_locks: RepoLocks,
+    pub forges: Vec<forge::Forge>,
+    pub repo_locks: KeyedLocks<PathBuf>,
     pub mcp: mcp::Mcp,
+    pub sandbox: Sandbox,
 }
 
 #[tokio::main]
@@ -63,8 +71,9 @@ async fn main() -> Result<()> {
     let forges = config
         .forges
         .iter()
-        .map(|(name, config)| Ok((name.clone(), forge::Forge::new(config)?)))
-        .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+        .map(|(name, config)| forge::Forge::new(name, config))
+        .collect::<Result<Vec<_>>>()?;
+    let sandbox = Sandbox::new(config.sandbox.entry.clone())?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(120))
@@ -77,16 +86,18 @@ async fn main() -> Result<()> {
         http,
         runs: Runs::default(),
         forges,
-        repo_locks: RepoLocks::default(),
+        repo_locks: KeyedLocks::default(),
         mcp,
+        sandbox,
     });
+    cleanup::spawn(app.clone());
     info!(data_dir = %app.config.data_dir.display(), "configuration loaded");
 
     let setup_app = app.clone();
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: commands::all(),
-            event_handler: |framework, event| Box::pin(chat::event_handler(framework, event)),
+            event_handler: |framework, event| Box::pin(event_handler(framework, event)),
             on_error: |error| Box::pin(on_error(error)),
             allowed_mentions: Some(serenity::CreateAllowedMentions::new()),
             owners: app.config.access.owner_ids.iter().copied().collect(),
@@ -137,6 +148,30 @@ async fn main() -> Result<()> {
     app.mcp.shutdown().await;
     info!("MCP clients shut down");
     discord_result
+}
+
+async fn event_handler(
+    framework: poise::FrameworkContext<'_, Data, Error>,
+    event: &serenity::FullEvent,
+) -> Result<()> {
+    let app = framework.user_data;
+    let discord = framework.serenity_context;
+    match event {
+        serenity::FullEvent::Message { new_message } => {
+            chat::handle_message(app, discord, new_message).await
+        }
+        serenity::FullEvent::InteractionCreate { interaction } => {
+            match interaction.as_message_component() {
+                Some(component) => chat::handle_component(app, discord, component).await,
+                None => Ok(()),
+            }
+        }
+        serenity::FullEvent::GuildBanRemoval {
+            guild_id,
+            unbanned_user,
+        } => moderation::set_temp_ban(&app.db, *guild_id, unbanned_user.id, None).await,
+        _ => Ok(()),
+    }
 }
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {

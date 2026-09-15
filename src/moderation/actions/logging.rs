@@ -1,58 +1,55 @@
 use std::time::Duration;
 
 use poise::serenity_prelude as serenity;
+use sqlx::SqlitePool;
 use tracing::warn;
 
-use crate::moderation::Case;
+use super::mod_log_channel;
+use crate::moderation::Record;
 
-pub async fn post_log(discord: &serenity::Context, db: &sqlx::SqlitePool, case: &Case) {
-    let channel = match sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT mod_log_channel_id FROM guild_settings WHERE guild_id = ?",
-    )
-    .bind(case.guild_id)
-    .fetch_optional(db)
-    .await
-    {
-        Ok(Some(Some(id))) => crate::db::stored_discord_id(id)
-            .ok()
-            .map(serenity::ChannelId::new),
-        Ok(_) => None,
+pub async fn post_log(
+    discord: &serenity::Context,
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+    moderator_id: serenity::UserId,
+    record: &Record<'_>,
+) {
+    let channel = match mod_log_channel(db, guild_id).await {
+        Ok(Some(channel)) => channel,
+        Ok(None) => return,
         Err(error) => {
-            warn!(
-                ?error,
-                case_id = case.id,
-                "failed to read moderation log setting"
-            );
-            None
+            warn!(error = %format!("{error:#}"), %guild_id, "failed to read moderation log setting");
+            return;
         }
     };
-    let Some(channel) = channel else { return };
-    let duration = case.duration_secs.map_or_else(
-        || "None".to_owned(),
-        |seconds| humantime::format_duration(Duration::from_secs(seconds as u64)).to_string(),
-    );
-    let expiry = case.expires_at.map_or_else(
-        || "None".to_owned(),
-        |timestamp| format!("<t:{timestamp}:F>"),
-    );
     let target = [
-        case.target_id.map(|id| format!("Member: <@{id}> (`{id}`)")),
-        case.channel_id
+        record.target.map(|id| format!("Member: <@{id}> (`{id}`)")),
+        record
+            .channel
             .map(|id| format!("Channel: <#{id}> (`{id}`)")),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
     .join("\n");
-    let embed = serenity::CreateEmbed::new()
-        .title(format!("Moderation case #{}", case.id))
-        .field("Action", case.action.to_string(), true)
-        .field("Target", target, false)
-        .field("Moderator", format!("<@{}>", case.moderator_id), true)
-        .field("Reason", &case.reason, false)
-        .field("Duration", duration, true)
-        .field("Expiry", expiry, true)
-        .timestamp(serenity::Timestamp::from_unix_timestamp(case.created_at).unwrap_or_default());
+    let mut embed = serenity::CreateEmbed::new()
+        .title(record.action.to_string())
+        .field("Moderator", format!("<@{moderator_id}>"), true)
+        .field("Reason", record.reason, false)
+        .timestamp(serenity::Timestamp::now());
+    if !target.is_empty() {
+        embed = embed.field("Target", target, false);
+    }
+    if let Some(duration) = record.duration {
+        embed = embed.field(
+            "Duration",
+            humantime::format_duration(Duration::from_secs(duration.as_secs())).to_string(),
+            true,
+        );
+    }
+    if let Some(expires_at) = record.expires_at {
+        embed = embed.field("Expires", format!("<t:{expires_at}:F>"), true);
+    }
     if let Err(error) = channel
         .send_message(
             discord,
@@ -62,6 +59,6 @@ pub async fn post_log(discord: &serenity::Context, db: &sqlx::SqlitePool, case: 
         )
         .await
     {
-        warn!(?error, case_id = case.id, %channel, "failed to post moderation log");
+        warn!(?error, %channel, "failed to post moderation log");
     }
 }
