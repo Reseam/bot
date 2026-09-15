@@ -28,4 +28,5 @@ jobs:
       - name: Deploy
         env:
           DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK }}
-        run: wget -q -O- --header "Content-Type: application/json" --post-data "{}" "$DOKPLOY_WEBHOOK"
+        run: |
+          wget -q -O- --header "Content-Type: application/json" --post-data "{}" "$DOKPLOY_WEBHOOK"
