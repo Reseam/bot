@@ -45,6 +45,7 @@ Bridge commands run in the bot with the permissions of the person who asked:
 - `discord`: messages, attachments, channels, members, server info, send, react, threads, pins, and `discord mod` for moderation.
 - `repo clone URL [--ref REF] [--history]`: clone or update an HTTPS repository.
 - `mcp list`, `mcp SERVER TOOL --help`, `mcp SERVER TOOL key=value`: call tools from servers configured under `[mcp.*]`.
+- `upload [--form FIELD] [--method M] [--header 'K: V'] URL FILE`: send a file's exact bytes (team only). just-bash's curl sends request bodies as text, so binary uploads go through this.
 - `view FILE`: attach an image from the sandbox to the result.
 
 ## Configuration

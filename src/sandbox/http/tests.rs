@@ -30,3 +30,16 @@ fn only_public_addresses_are_reachable() {
         );
     }
 }
+
+#[test]
+fn approval_preview_keeps_text_and_counts_binary_bytes() {
+    let mut body = b"--b\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"clip.mp4\"\r\n\r\n".to_vec();
+    body.extend_from_slice(&[0x00, 0x9f, 0xff, 0x10]);
+
+    let preview = body_preview(&body);
+
+    assert!(preview.starts_with("--b\r\nContent-Disposition"));
+    assert!(preview.contains("filename=\"clip.mp4\""));
+    assert!(preview.ends_with("[3 more bytes of binary data]"));
+    assert_eq!(body_preview(b"{\"title\":\"ok\"}"), "{\"title\":\"ok\"}");
+}

@@ -25,7 +25,7 @@ pub struct FetchRequest {
     url: String,
     method: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    body_base64: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -75,14 +75,16 @@ impl Http {
         let method =
             Method::from_bytes(request.method.as_bytes()).context("invalid HTTP method")?;
         let is_read = matches!(method, Method::GET | Method::HEAD);
+        let body = request
+            .body_base64
+            .map(|body| base64::engine::general_purpose::STANDARD.decode(body))
+            .transpose()
+            .context("request body is not valid base64")?;
         if !is_read {
             let host = url.host_str().unwrap_or_default();
             let mut action = format!("{method} {url}");
-            if let Some(body) = &request.body {
-                action.push_str(&format!(
-                    "\n```\n{}\n```",
-                    truncate_chars(body, APPROVAL_BODY_LIMIT)
-                ));
+            if let Some(body) = &body {
+                action.push_str(&format!("\n```\n{}\n```", body_preview(body)));
             }
             run.approve(&format!("{method} {host}"), &action).await?;
         }
@@ -114,7 +116,7 @@ impl Http {
 
         let client = if is_read { &self.reads } else { &self.writes };
         let mut builder = client.request(method, url).headers(headers);
-        if let Some(body) = request.body {
+        if let Some(body) = body {
             builder = builder.body(body);
         }
         let response = tokio::select! {
@@ -155,6 +157,22 @@ impl Http {
             url,
         })
     }
+}
+
+fn body_preview(body: &[u8]) -> String {
+    let text = match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(error) => {
+            let text = std::str::from_utf8(&body[..error.valid_up_to()])
+                .expect("valid_up_to marks a UTF-8 prefix");
+            let binary = body.len() - text.len();
+            return format!(
+                "{}\n[{binary} more bytes of binary data]",
+                truncate_chars(text, APPROVAL_BODY_LIMIT)
+            );
+        }
+    };
+    truncate_chars(text, APPROVAL_BODY_LIMIT)
 }
 
 fn check_host(url: &Url) -> Result<()> {

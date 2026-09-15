@@ -84,7 +84,7 @@ export interface FetchRequest {
   url: string;
   method: string;
   headers: Record<string, string>;
-  body: string | null;
+  body_base64: string | null;
 }
 
 export type Outgoing = ExecResult | CallRequest | FetchRequest;

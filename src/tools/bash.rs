@@ -20,9 +20,10 @@ Bridge commands (run `COMMAND --help` for details):
 - discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
 - repo clone URL [--ref REF] [--history]: clone or update an HTTPS repository.
 - mcp list, mcp SERVER TOOL --help, mcp SERVER TOOL key=value: call MCP services such as web search.
+- upload [--form FIELD] [--method M] [--header 'K: V'] URL FILE: send a file's exact bytes, as a multipart part with --form or as the raw body. Use it for images, video, and any other binary upload; curl only sends text bodies.
 - view FILE: attach an image file to this result so you can see it.
 
-curl reaches any public host. Requests to configured forge APIs are authenticated automatically. POST, PUT, PATCH, and DELETE requests, moderation, and messages to other channels ask the invoker for approval.";
+curl and upload reach any public host. Requests to configured forge APIs are authenticated automatically. POST, PUT, PATCH, and DELETE requests, moderation, and messages to other channels ask the invoker for approval.";
 
 const MEMBER_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
 

@@ -11,8 +11,10 @@ import {
   stdoutAsBytes,
   stdoutKind,
 } from "just-bash";
+import { randomUUID } from "node:crypto";
+import { posix } from "node:path";
 import { request, send } from "./bridge.js";
-import type { BridgeCommand, ExecRequest, ExecResult, Image } from "./protocol.js";
+import type { BridgeCommand, ExecRequest, ExecResult, FetchResponse, Image } from "./protocol.js";
 
 const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp"];
 const REPO_OVERLAY_BYTES = 256 * 1024 * 1024;
@@ -111,6 +113,7 @@ async function create(message: ExecRequest): Promise<Sandbox> {
     fetch: bridgeFetch(message.sandbox),
     customCommands: [
       ...TEAM_BRIDGE_COMMANDS.map((name) => bridgeCommand(message.sandbox, name)),
+      uploadCommand(message.sandbox),
       viewCommand(images),
     ],
   });
@@ -170,26 +173,124 @@ function viewCommand(images: Image[]): Command {
   });
 }
 
+const UPLOAD_USAGE = `usage: upload [--method METHOD] [--header 'Name: value']... [--form FIELD] URL FILE
+Send FILE's exact bytes: as a multipart/form-data part named FIELD with --form, otherwise as the raw request body.
+Prints the response body and exits 22 on an HTTP error status.`;
+
+interface Upload {
+  method: string;
+  headers: Record<string, string>;
+  form: string | null;
+  url: string;
+  file: string;
+}
+
+function parseUpload(args: string[]): Upload | string {
+  const rest = [...args];
+  const positional: string[] = [];
+  let method = "POST";
+  let form: string | null = null;
+  const headers: Record<string, string> = {};
+  for (let arg = rest.shift(); arg !== undefined; arg = rest.shift()) {
+    if (arg === "--method" || arg === "-X") {
+      method = (rest.shift() ?? "").toUpperCase();
+    } else if (arg === "--header" || arg === "-H") {
+      const header = rest.shift() ?? "";
+      const colon = header.indexOf(":");
+      if (colon < 1) {
+        return `invalid header: ${header}`;
+      }
+      headers[header.slice(0, colon).trim().toLowerCase()] = header.slice(colon + 1).trim();
+    } else if (arg === "--form" || arg === "-F") {
+      form = rest.shift() ?? "";
+    } else if (arg.startsWith("-")) {
+      return `unknown option: ${arg}`;
+    } else {
+      positional.push(arg);
+    }
+  }
+  const [url, file, ...extra] = positional;
+  if (url === undefined || file === undefined || extra.length > 0) {
+    return "expected URL and FILE";
+  }
+  return { method, headers, form, url, file };
+}
+
+function uploadCommand(sandbox: number): Command {
+  return defineCommand("upload", async (args, ctx) => {
+    if (args.includes("--help") || args.includes("-h")) {
+      return { stdout: `${UPLOAD_USAGE}\n`, stderr: "", exitCode: 0 };
+    }
+    const upload = parseUpload(args);
+    if (typeof upload === "string") {
+      return { stdout: "", stderr: `upload: ${upload}\n${UPLOAD_USAGE}\n`, exitCode: 2 };
+    }
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(await ctx.fs.readFileBuffer(ctx.fs.resolvePath(ctx.cwd, upload.file)));
+    } catch (error) {
+      return { stdout: "", stderr: `upload: ${upload.file}: ${errorMessage(error)}\n`, exitCode: 1 };
+    }
+    let body = bytes;
+    if (upload.form !== null) {
+      const boundary = `reseam-${randomUUID()}`;
+      const filename = posix.basename(upload.file).replaceAll('"', "");
+      body = Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${upload.form}"; filename="${filename}"\r\n` +
+            "Content-Type: application/octet-stream\r\n\r\n",
+        ),
+        bytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      upload.headers["content-type"] = `multipart/form-data; boundary=${boundary}`;
+    } else {
+      upload.headers["content-type"] ??= "application/octet-stream";
+    }
+    try {
+      const response = await fetchBytes(sandbox, upload.url, upload.method, upload.headers, body, ctx.signal);
+      const text = Buffer.from(response.body_base64, "base64").toString("utf8");
+      if (response.status >= 400) {
+        return { stdout: text, stderr: `upload: HTTP ${response.status} ${response.status_text}\n`, exitCode: 22 };
+      }
+      return { stdout: text, stderr: "", exitCode: 0 };
+    } catch (error) {
+      return { stdout: "", stderr: `upload: ${errorMessage(error)}\n`, exitCode: 1 };
+    }
+  });
+}
+
+async function fetchBytes(
+  sandbox: number,
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: Buffer | null,
+  signal: AbortSignal | undefined,
+): Promise<FetchResponse> {
+  const result = await request(
+    { type: "fetch", sandbox, url, method, headers, body_base64: body?.toString("base64") ?? null },
+    signal,
+  );
+  if ("error" in result) {
+    throw new Error(result.error);
+  }
+  if (!("fetch" in result)) {
+    throw new Error("unexpected reply to fetch");
+  }
+  return result.fetch;
+}
+
 function bridgeFetch(sandbox: number): SecureFetch {
   return async (url, options = {}) => {
-    const result = await request(
-      {
-        type: "fetch",
-        sandbox,
-        url,
-        method: options.method?.toUpperCase() ?? "GET",
-        headers: Object.fromEntries(new Headers(options.headers)),
-        body: options.body ?? null,
-      },
+    const response = await fetchBytes(
+      sandbox,
+      url,
+      options.method?.toUpperCase() ?? "GET",
+      Object.fromEntries(new Headers(options.headers)),
+      options.body === undefined ? null : Buffer.from(options.body, "utf8"),
       options.signal,
     );
-    if ("error" in result) {
-      throw new Error(result.error);
-    }
-    if (!("fetch" in result)) {
-      throw new Error("unexpected reply to fetch");
-    }
-    const response = result.fetch;
     return {
       status: response.status,
       statusText: response.status_text,
