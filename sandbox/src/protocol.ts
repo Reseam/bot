@@ -6,6 +6,7 @@ export interface ExecRequest {
   sandbox: number;
   workspace: string;
   repos: string;
+  team: boolean;
   command: string;
   timeout_ms: number;
 }

@@ -4,7 +4,7 @@ Discord bot for the Reseam team with a built-in AI agent, plus moderation comman
 
 ## Using it
 
-Only owners (`access.owner_ids`) and members with an access role (`access.role_ids`, the Team and AI Access roles) can use the AI. Moderation commands use normal Discord permissions instead.
+Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full agent. Member roles (`access.member_role_ids`) get a sandbox limited to `discord`, `view`, and text tools: no web, MCP, repositories, forge APIs, python3, or js-exec, and no Create issue or `/mcp`. Moderation commands use normal Discord permissions instead.
 
 - **Mention the bot** (or its role) or **reply to one of its messages**. It reads the message you replied to and any attached images, PDFs, DOCX, or text files, then streams its answer. It reads more of the channel on demand, and `agent.history_messages` (0 to 100, default 0) adds that many earlier messages up front. Press **Stop** to end a run; only the person who started it, owners, and members with Manage Messages can.
 - **Reply to its answer** to continue the same conversation. Earlier turns and command output are kept in SQLite. Conversations are summarized once they pass `agent.compact_at_tokens`.

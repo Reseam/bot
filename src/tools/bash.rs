@@ -10,7 +10,7 @@ use crate::chat::Run;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 1_800;
-const DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
+const TEAM_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
 
 Paths: /workspace is the writable working directory. /repos/<host>/<owner>/<name> holds repositories cloned with `repo clone`; edits there are discarded.
 
@@ -24,6 +24,18 @@ Bridge commands (run `COMMAND --help` for details):
 
 curl reaches any public host. Requests to configured forge APIs are authenticated automatically. POST, PUT, PATCH, and DELETE requests, moderation, and messages to other channels ask the invoker for approval.";
 
+const MEMBER_DESCRIPTION: &str = "Run a bash script in this conversation's sandbox. It is an emulated shell with its own filesystem, not the bot's machine. Files persist across calls in the conversation and are deleted after 8 hours without use.
+
+Paths: /workspace is the writable working directory.
+
+Built in: common coreutils, grep, rg, sed, awk, jq, yq, sqlite3, xan (CSV), diff, tar, gzip, and find. There is no network access, python3, js-exec, git, package manager, or compiler.
+
+Bridge commands (run `COMMAND --help` for details):
+- discord: read messages, attachments, channels, members, and the server; send messages, react, create threads, pin; `discord mod` for moderation.
+- view FILE: attach an image file to this result so you can see it.
+
+Moderation and messages to other channels ask the invoker for approval.";
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
@@ -32,7 +44,12 @@ struct Arguments {
 }
 
 pub fn tool(run: &Arc<Run>) -> Tool {
-    Tool::new("bash", DESCRIPTION, run.clone(), bash)
+    let description = if run.team {
+        TEAM_DESCRIPTION
+    } else {
+        MEMBER_DESCRIPTION
+    };
+    Tool::new("bash", description, run.clone(), bash)
 }
 
 async fn bash(run: Arc<Run>, arguments: Arguments) -> Result<ToolOutput> {

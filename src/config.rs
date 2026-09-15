@@ -86,7 +86,8 @@ pub struct DiscordConfig {
 #[serde(deny_unknown_fields)]
 pub struct AccessConfig {
     pub owner_ids: Vec<UserId>,
-    pub role_ids: Vec<RoleId>,
+    pub team_role_ids: Vec<RoleId>,
+    pub member_role_ids: Vec<RoleId>,
 }
 
 #[derive(Clone, Deserialize)]

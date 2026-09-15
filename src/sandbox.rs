@@ -70,6 +70,7 @@ enum ToNode {
         sandbox: i64,
         workspace: PathBuf,
         repos: PathBuf,
+        team: bool,
         command: String,
         timeout_ms: u128,
     },
@@ -216,6 +217,7 @@ impl Sandbox {
             sandbox: run.conversation_id,
             workspace,
             repos,
+            team: run.team,
             command: command.to_owned(),
             timeout_ms: timeout.as_millis(),
         });

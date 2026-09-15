@@ -14,13 +14,14 @@ import {
 import { request, send } from "./bridge.js";
 import type { BridgeCommand, ExecRequest, ExecResult, Image } from "./protocol.js";
 
-const BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp"];
+const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp"];
 const REPO_OVERLAY_BYTES = 256 * 1024 * 1024;
 const MAX_EXECUTION_MS = 30 * 60 * 1000;
 const PYTHON_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface Sandbox {
-  bash: Bash;
+  team: Bash;
+  member: Bash;
   images: Image[];
   tail: Promise<void>;
 }
@@ -56,7 +57,8 @@ async function run(sandbox: Sandbox, message: ExecRequest, cancelled: AbortSigna
   const timeout = AbortSignal.timeout(message.timeout_ms);
   const signal = AbortSignal.any([cancelled, timeout]);
   try {
-    const result = await sandbox.bash.exec(message.command, { signal });
+    const bash = message.team ? sandbox.team : sandbox.member;
+    const result = await bash.exec(message.command, { signal });
     const stderr = timeout.aborted
       ? `${result.stderr}timed out after ${message.timeout_ms / 1000}s\n`
       : result.stderr;
@@ -89,29 +91,43 @@ function open(message: ExecRequest): Promise<Sandbox> {
 }
 
 async function create(message: ExecRequest): Promise<Sandbox> {
-  const base = new InMemoryFs();
-  await base.mkdir("/tmp", { recursive: true });
-  const fs = new MountableFs({ base });
-  fs.mount("/workspace", new ReadWriteFs({ root: message.workspace }));
-  fs.mount(
+  const workspace = new ReadWriteFs({ root: message.workspace });
+  const teamFs = await filesystem(workspace);
+  teamFs.mount(
     "/repos",
     new OverlayFs({ root: message.repos, mountPoint: "/", maxMemoryBytes: REPO_OVERLAY_BYTES }),
   );
   const images: Image[] = [];
-  const bash = new Bash({
-    fs,
+  const shared = {
     cwd: "/workspace",
     env: { HOME: "/workspace" },
+    executionLimits: { maxExecutionTimeMs: MAX_EXECUTION_MS, maxPythonTimeoutMs: PYTHON_TIMEOUT_MS },
+  };
+  const team = new Bash({
+    ...shared,
+    fs: teamFs,
     python: true,
     javascript: true,
     fetch: bridgeFetch(message.sandbox),
     customCommands: [
-      ...BRIDGE_COMMANDS.map((name) => bridgeCommand(message.sandbox, name)),
+      ...TEAM_BRIDGE_COMMANDS.map((name) => bridgeCommand(message.sandbox, name)),
       viewCommand(images),
     ],
-    executionLimits: { maxExecutionTimeMs: MAX_EXECUTION_MS, maxPythonTimeoutMs: PYTHON_TIMEOUT_MS },
   });
-  return { bash, images, tail: Promise.resolve() };
+  const member = new Bash({
+    ...shared,
+    fs: await filesystem(workspace),
+    customCommands: [bridgeCommand(message.sandbox, "discord"), viewCommand(images)],
+  });
+  return { team, member, images, tail: Promise.resolve() };
+}
+
+async function filesystem(workspace: ReadWriteFs): Promise<MountableFs> {
+  const base = new InMemoryFs();
+  await base.mkdir("/tmp", { recursive: true });
+  const fs = new MountableFs({ base });
+  fs.mount("/workspace", workspace);
+  return fs;
 }
 
 function bridgeCommand(sandbox: number, name: BridgeCommand): Command {

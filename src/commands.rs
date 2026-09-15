@@ -22,7 +22,7 @@ pub fn all() -> Vec<Command> {
 #[poise::command(
     slash_command,
     guild_only,
-    check = "crate::access::ai_access",
+    check = "crate::access::team_only",
     subcommands("mcp_status", "mcp_reconnect"),
     subcommand_required
 )]
@@ -157,7 +157,7 @@ async fn ask(
 #[poise::command(
     context_menu_command = "Create issue",
     guild_only,
-    check = "crate::access::ai_access"
+    check = "crate::access::team_only"
 )]
 async fn create_issue(ctx: Context<'_>, message: serenity::Message) -> Result<()> {
     let guild_id = ctx

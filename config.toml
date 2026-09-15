@@ -6,7 +6,8 @@ guild_id = "${DISCORD_GUILD_ID}"
 
 [access]
 owner_ids = ["${DISCORD_OWNER_ID}"]
-role_ids = ["${DISCORD_TEAM_ROLE_ID}", "${DISCORD_AI_ROLE_ID}"]
+team_role_ids = ["${DISCORD_TEAM_ROLE_ID}"]
+member_role_ids = ["${DISCORD_AI_ROLE_ID}"]
 
 [llm]
 base_url = "${LLM_BASE_URL}"

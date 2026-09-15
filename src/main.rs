@@ -181,7 +181,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             if let Err(error) = ctx
                 .send(
                     poise::CreateReply::new()
-                        .content("You need AI access to use this.")
+                        .content("You don't have access to this.")
                         .ephemeral(true),
                 )
                 .await
