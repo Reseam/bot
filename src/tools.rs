@@ -14,6 +14,7 @@ use crate::llm::{FunctionSpec, ToolSpec, ToolType};
 pub(crate) mod discord;
 mod forge;
 mod mcp;
+mod moderation;
 pub(crate) mod repo;
 mod shell;
 
@@ -179,6 +180,7 @@ impl ToolSet {
 pub fn for_run(run: &Arc<Run>) -> ToolSet {
     let mut tools = discord::tools(run);
     tools.extend(forge::tools(run));
+    tools.extend(moderation::tools(run));
     tools.extend(repo::tools(run));
     if run.app.config.shell.enabled {
         tools.extend(shell::tools(run));

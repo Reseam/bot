@@ -1,7 +1,19 @@
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_OUTPUT_LINES: usize = 2_000;
 
 pub const DISCORD_MESSAGE_LIMIT: usize = 2_000;
+
+pub fn parse_duration(input: &str) -> Result<Duration> {
+    let duration = humantime::parse_duration(input).context("invalid duration")?;
+    if duration.is_zero() {
+        bail!("duration must be greater than zero");
+    }
+    Ok(duration)
+}
 
 pub fn truncate_chars(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
@@ -153,5 +165,14 @@ mod tests {
     #[test]
     fn leaves_short_output_unchanged() {
         assert_eq!(truncate_output("short\noutput"), "short\noutput");
+    }
+
+    #[test]
+    fn duration_parser_rejects_zero_and_invalid_values() -> anyhow::Result<()> {
+        assert_eq!(parse_duration("2h 30m")?, Duration::from_secs(9_000));
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("0s").is_err());
+        assert!(parse_duration("tomorrow").is_err());
+        Ok(())
     }
 }

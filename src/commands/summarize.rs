@@ -1,8 +1,9 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use poise::serenity_prelude as serenity;
 
 use crate::chat;
 use crate::chat::context::format_message;
+use crate::text::parse_duration;
 use crate::tools::discord::read_channel;
 use crate::{Data, Error};
 
@@ -40,7 +41,12 @@ async fn summarize(
         .as_deref()
         .map(parse_duration)
         .transpose()?
-        .map(|seconds| serenity::Timestamp::now().unix_timestamp() - seconds);
+        .map(|duration| {
+            i64::try_from(duration.as_secs())
+                .context("since duration is too large")
+                .map(|seconds| serenity::Timestamp::now().unix_timestamp() - seconds)
+        })
+        .transpose()?;
     let history = fetch_before(
         ctx.serenity_context(),
         target.id,
@@ -199,15 +205,6 @@ async fn start_run(ctx: Context<'_>, request: chat::CommandRequest) -> Result<()
     Ok(())
 }
 
-fn parse_duration(input: &str) -> Result<i64> {
-    let duration = humantime::parse_duration(input)
-        .with_context(|| format!("invalid since duration `{input}`"))?;
-    if duration.is_zero() {
-        bail!("since duration must be greater than zero");
-    }
-    i64::try_from(duration.as_secs()).context("since duration is too large")
-}
-
 async fn fetch_before(
     discord: &serenity::Context,
     channel_id: serenity::ChannelId,
@@ -316,7 +313,10 @@ mod tests {
 
     #[test]
     fn duration_parser_accepts_compound_values_and_rejects_edges() -> Result<()> {
-        assert_eq!(parse_duration("2h 30m")?, 9_000);
+        assert_eq!(
+            parse_duration("2h 30m")?,
+            std::time::Duration::from_secs(9_000)
+        );
         assert!(parse_duration("").is_err());
         assert!(parse_duration("0s").is_err());
         assert!(parse_duration("tomorrow").is_err());

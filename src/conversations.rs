@@ -5,6 +5,7 @@ use poise::serenity_prelude as serenity;
 use sqlx::{FromRow, SqlitePool};
 use tracing::{error, info};
 
+use crate::db::{discord_id, stored_discord_id};
 use crate::llm::{ContentPart, Message, UserContent};
 
 pub struct Conversation {
@@ -62,12 +63,8 @@ pub async fn last_message_id(
     .fetch_one(db)
     .await
     .context("failed to find the conversation's last Discord message")?;
-    id.map(|id| {
-        u64::try_from(id)
-            .map(serenity::MessageId::new)
-            .context("stored Discord message ID is negative")
-    })
-    .transpose()
+    id.map(|id| stored_discord_id(id).map(serenity::MessageId::new))
+        .transpose()
 }
 
 pub async fn save(db: &SqlitePool, save: Save<'_>) -> Result<i64> {
@@ -172,10 +169,6 @@ fn strip_images(transcript: &[Message]) -> Vec<Message> {
             message => message,
         })
         .collect()
-}
-
-fn discord_id(id: u64) -> Result<i64> {
-    i64::try_from(id).context("Discord ID exceeds SQLite INTEGER range")
 }
 
 #[cfg(test)]

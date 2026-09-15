@@ -5,6 +5,14 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+pub fn discord_id(id: u64) -> Result<i64> {
+    i64::try_from(id).context("Discord ID exceeds SQLite INTEGER range")
+}
+
+pub fn stored_discord_id(id: i64) -> Result<u64> {
+    u64::try_from(id).context("stored Discord ID is negative")
+}
+
 pub async fn open(data_dir: &Path) -> Result<SqlitePool> {
     tokio::fs::create_dir_all(data_dir)
         .await

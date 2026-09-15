@@ -14,6 +14,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 pub fn all() -> Vec<Command> {
     let mut commands = vec![ask(), create_issue(), mcp()];
     commands.extend(summarize::commands());
+    commands.extend(crate::moderation::commands::all());
     commands
 }
 
