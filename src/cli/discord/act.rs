@@ -7,25 +7,9 @@ use poise::serenity_prelude as serenity;
 use super::channel;
 use crate::chat::Run;
 use crate::cli::{CommandOutput, snowflake};
-use crate::discord::{
-    channel_link, jump_link, require_permissions, resolve_channel, send_permission,
-};
-use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
+use crate::discord::{channel_link, jump_link, require_permissions, resolve_channel};
 
 const PIN_MESSAGES: serenity::Permissions = serenity::Permissions::from_bits_retain(1 << 51);
-const APPROVAL_PREVIEW_LIMIT: usize = 1_500;
-
-#[derive(Args)]
-pub struct Send {
-    /// Channel or thread ID (default: the current channel)
-    #[arg(long, value_parser = snowflake)]
-    channel: Option<u64>,
-    /// Reply to this message ID
-    #[arg(long, value_parser = snowflake)]
-    reply: Option<u64>,
-    /// Message text. Read from stdin when omitted
-    text: Option<String>,
-}
 
 #[derive(Args)]
 pub struct React {
@@ -56,44 +40,6 @@ pub struct Pin {
     message: u64,
     #[arg(long, value_parser = snowflake)]
     channel: Option<u64>,
-}
-
-pub async fn send(run: &Arc<Run>, args: Send, stdin: String) -> Result<CommandOutput> {
-    let text = args.text.unwrap_or(stdin);
-    let content = text.trim_end_matches('\n');
-    if !(1..=DISCORD_MESSAGE_LIMIT).contains(&content.chars().count()) {
-        bail!("message must be between 1 and {DISCORD_MESSAGE_LIMIT} characters");
-    }
-    let channel_id = channel(run, args.channel);
-    let access = resolve_channel(&run.discord, run.guild_id, &run.invoker, channel_id).await?;
-    let required = send_permission(&access.channel) | serenity::Permissions::VIEW_CHANNEL;
-    if !access.permissions.contains(required) {
-        bail!("invoker cannot send messages in #{}", access.channel.name);
-    }
-    if channel_id != run.channel_id {
-        run.approve(
-            &format!("discord send {channel_id}"),
-            &format!(
-                "Send to <#{channel_id}>:\n>>> {}",
-                truncate_chars(content, APPROVAL_PREVIEW_LIMIT)
-            ),
-        )
-        .await?;
-    }
-    let mut builder = serenity::CreateMessage::new()
-        .content(content)
-        .allowed_mentions(serenity::CreateAllowedMentions::new());
-    if let Some(reply) = args.reply {
-        builder = builder.reference_message((channel_id, serenity::MessageId::new(reply)));
-    }
-    let message = channel_id
-        .send_message(&run.discord, builder)
-        .await
-        .context("failed to send Discord message")?;
-    Ok(CommandOutput::text(format!(
-        "Sent {}",
-        jump_link(run.guild_id, channel_id, message.id)
-    )))
 }
 
 pub async fn react(run: &Arc<Run>, args: React) -> Result<CommandOutput> {

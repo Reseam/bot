@@ -6,7 +6,7 @@ New to the bot? Read [GUIDE.md](GUIDE.md) for a walkthrough of what it does and 
 
 ## Using it
 
-Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full agent. Member roles (`access.member_role_ids`) get a sandbox limited to `discord`, `view`, and text tools: no web, MCP, repositories, forge APIs, python3, or js-exec, and no Create issue or `/mcp`. Moderation commands use normal Discord permissions instead.
+Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full agent. Member roles (`access.member_role_ids`) get a sandbox limited to `discord`, `archive`, `view`, and text tools: no web, MCP, repositories, forge APIs, python3, or js-exec, and no Create issue or `/mcp`. Moderation commands use normal Discord permissions instead.
 
 - **Mention the bot** (or its role) or **reply to one of its messages**. It reads the message you replied to and any attached images, PDFs, DOCX, or text files, then streams its answer. It reads more of the channel on demand, and `agent.history_messages` (0 to 100, default 0) adds that many earlier messages up front. Press **Stop** to end a run; only the person who started it, owners, and members with Manage Messages can.
 - **Reply to its answer** to continue the same conversation. Earlier turns and command output are kept in SQLite. Conversations are summarized once they pass `agent.compact_at_tokens`.
@@ -48,6 +48,11 @@ Bridge commands run in the bot with the permissions of the person who asked:
 - `repo clone URL [--ref REF] [--history]`: clone or update an HTTPS repository.
 - `mcp list`, `mcp SERVER TOOL --help`, `mcp SERVER TOOL key=value`: call tools from servers configured under `[mcp.*]`.
 - `upload [--form FIELD] [--method M] [--header 'K: V'] URL FILE`: send a file's exact bytes (team only). just-bash's curl sends request bodies as text, so binary uploads go through this.
+- `discord send --file PATH [--file PATH...] ["message"]`: send sandbox files as Discord attachments, optionally with text, `--reply`, or `--channel`. Paths resolve from the shell's current directory. Up to 10 files and 10 MiB combined per message; requires Attach Files permission. Other channels use the usual approval flow.
+- `discord send --file /tmp/result.csv --filename report.csv`: choose the attachment name without renaming the source. For multiple files, supply one `--filename` per `--file`, in the same order.
+- `archive --output bundle.zip --recursive project/`: create a compressed ZIP preserving folders and empty directories. Use repeatable `--exclude 'node_modules/**'` globs to omit entries. Accepts up to 256 entries / 64 MiB input, rejects symlinks and duplicate paths, and skips its own output file. Existing ZIP output is replaced. `archive create` is also accepted.
+- `archive list bundle.zip`: list ZIP entries and uncompressed sizes.
+- `archive extract bundle.zip --output extracted`: extract into a new sandbox directory whose parent already exists. Rejects unsafe paths, symlinks, special files, conflicting entries, and archives exceeding 256 entries / 64 MiB expanded size. ZIP files may be up to 128 MiB to allow for compression and metadata overhead. Existing destination directories are never overwritten. Available to both team and member runs; send archives with `discord send --file bundle.zip` (the normal upload limit still applies).
 - `view FILE`: attach an image from the sandbox to the result.
 
 ## Configuration

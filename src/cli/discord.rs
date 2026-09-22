@@ -10,6 +10,7 @@ use crate::chat::Run;
 mod act;
 mod moderation;
 mod read;
+mod send;
 mod server;
 
 #[derive(Parser)]
@@ -38,8 +39,8 @@ enum Command {
     Member(server::Member),
     /// Search members by username or nickname prefix
     Members(server::Members),
-    /// Send a message. Other channels ask for approval
-    Send(act::Send),
+    /// Send text or sandbox files. Other channels ask for approval
+    Send(send::Send),
     /// Add a reaction to a message
     React(act::React),
     /// Create a public thread
@@ -53,7 +54,12 @@ enum Command {
     Mod(moderation::Mod),
 }
 
-pub async fn run(run: &Arc<Run>, args: Vec<String>, stdin: String) -> Result<CommandOutput> {
+pub async fn run(
+    run: &Arc<Run>,
+    args: Vec<String>,
+    stdin: String,
+    files: &mut crate::sandbox::files::Files,
+) -> Result<CommandOutput> {
     let cli = match parse::<Cli>("discord", args) {
         Ok(cli) => cli,
         Err(output) => return Ok(output),
@@ -66,7 +72,7 @@ pub async fn run(run: &Arc<Run>, args: Vec<String>, stdin: String) -> Result<Com
         Command::Server => server::server(run),
         Command::Member(args) => server::member(run, args).await,
         Command::Members(args) => server::members(run, args).await,
-        Command::Send(args) => act::send(run, args, stdin).await,
+        Command::Send(args) => send::send(run, args, stdin, files).await,
         Command::React(args) => act::react(run, args).await,
         Command::Thread(args) => act::thread(run, args).await,
         Command::Pin(args) => act::pin(run, args, true).await,

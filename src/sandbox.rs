@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
@@ -17,11 +16,15 @@ use tracing::{error, warn};
 use crate::App;
 use crate::attachments;
 use crate::chat::Run;
-use crate::cli::{self, BridgeCommand, CommandOutput};
+use crate::cli;
 use crate::text::truncate_output;
 use crate::tools::{ImageData, ToolOutput};
 
+pub mod files;
 mod http;
+mod protocol;
+
+use protocol::{ExecResult, FromNode, NodeImage, ReplyResult, ToNode};
 
 pub fn workspaces_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("workspaces")
@@ -47,6 +50,7 @@ pub struct Sandbox {
 struct Process {
     outgoing: mpsc::UnboundedSender<ToNode>,
     pending: Mutex<Option<HashMap<u64, oneshot::Sender<ExecResult>>>>,
+    file_reads: Mutex<HashMap<u64, mpsc::UnboundedSender<files::FileResult>>>,
     _child: Child,
 }
 
@@ -60,72 +64,6 @@ impl Process {
             warn!("sandbox service is not running");
         }
     }
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ToNode {
-    Exec {
-        id: u64,
-        sandbox: i64,
-        workspace: PathBuf,
-        repos: PathBuf,
-        team: bool,
-        command: String,
-        timeout_ms: u128,
-    },
-    Cancel {
-        id: u64,
-    },
-    Close {
-        sandbox: i64,
-    },
-    Reply {
-        id: u64,
-        result: ReplyResult,
-    },
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ReplyResult {
-    Command(CommandOutput),
-    Fetch(http::FetchResponse),
-    Error(String),
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum FromNode {
-    ExecResult(ExecResult),
-    Call {
-        id: u64,
-        sandbox: i64,
-        command: BridgeCommand,
-        args: Vec<String>,
-        stdin: String,
-    },
-    Fetch {
-        id: u64,
-        sandbox: i64,
-        #[serde(flatten)]
-        request: http::FetchRequest,
-    },
-}
-
-#[derive(Deserialize)]
-struct ExecResult {
-    id: u64,
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-    images: Vec<NodeImage>,
-}
-
-#[derive(Deserialize)]
-struct NodeImage {
-    name: String,
-    base64: String,
 }
 
 pub struct Execution {
@@ -270,6 +208,7 @@ impl Sandbox {
         let process = Arc::new(Process {
             outgoing,
             pending: Mutex::new(Some(HashMap::new())),
+            file_reads: Mutex::new(HashMap::new()),
             _child: child,
         });
         tokio::spawn(write_messages(stdin, receiver));
@@ -337,6 +276,11 @@ async fn read_messages(app: Weak<App>, process: Weak<Process>, stdout: ChildStdo
             return;
         };
         match message {
+            FromNode::FileResult { id, result } => {
+                if let Some(sender) = process.file_reads.lock().get(&id) {
+                    let _ = sender.send(result);
+                }
+            }
             FromNode::ExecResult(result) => {
                 let sender = process
                     .pending
@@ -357,7 +301,11 @@ async fn read_messages(app: Weak<App>, process: Weak<Process>, stdout: ChildStdo
                 tokio::spawn(async move {
                     let result = match app.runs.get_conversation(sandbox) {
                         Some(run) => {
-                            ReplyResult::Command(cli::run(&run, command, args, stdin).await)
+                            let mut files = files::Files::new(process.clone(), id);
+                            tokio::select! {
+                                output = cli::run(&run, command, args, stdin, &mut files) => ReplyResult::Command(output),
+                                () = run.cancel.cancelled() => ReplyResult::Error("cancelled".to_owned()),
+                            }
                         }
                         None => {
                             ReplyResult::Error("this conversation has no active run".to_owned())
@@ -388,6 +336,7 @@ async fn read_messages(app: Weak<App>, process: Weak<Process>, stdout: ChildStdo
     }
     if let Some(process) = process.upgrade() {
         process.pending.lock().take();
+        process.file_reads.lock().clear();
     }
     warn!("sandbox service exited");
 }

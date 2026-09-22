@@ -1,4 +1,4 @@
-export type BridgeCommand = "discord" | "repo" | "mcp";
+export type BridgeCommand = "discord" | "repo" | "mcp" | "archive";
 
 export interface ExecRequest {
   type: "exec";
@@ -52,7 +52,45 @@ export interface FetchResponse {
   url: string;
 }
 
-export type Incoming = ExecRequest | CancelRequest | CloseRequest | Reply;
+export interface ReadFileRequest {
+  type: "read_file";
+  id: number;
+  path: string;
+  max_bytes: number;
+}
+
+export interface WalkFilesRequest {
+  type: "walk_files";
+  id: number;
+  paths: string[];
+  output: string;
+  recursive: boolean;
+  exclude: string[];
+  max_entries: number;
+}
+
+export interface ArchiveEntry {
+  path: string;
+  name: string;
+  directory: boolean;
+}
+
+export interface WriteTreeRequest {
+  type: "write_tree";
+  id: number;
+  path: string;
+  entries: { name: string; base64: string | null }[];
+}
+
+export type FileRequest = ReadFileRequest | WalkFilesRequest | WriteTreeRequest;
+
+export interface FileResult {
+  type: "file_result";
+  id: number;
+  result: { base64: string } | { error: string } | { entries: ArchiveEntry[] } | "written";
+}
+
+export type Incoming = ExecRequest | CancelRequest | CloseRequest | Reply | FileRequest;
 
 export interface ExecResult {
   type: "exec_result";
@@ -87,4 +125,4 @@ export interface FetchRequest {
   body_base64: string | null;
 }
 
-export type Outgoing = ExecResult | CallRequest | FetchRequest;
+export type Outgoing = ExecResult | CallRequest | FetchRequest | FileResult;

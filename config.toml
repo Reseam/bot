@@ -17,6 +17,13 @@ context_window = 1048576
 max_output_tokens = 16000
 vision = true
 
+[llm.extra_body]
+service_tier = "flex"
+
+[llm.extra_body.provider]
+only = ["openai/flex"]
+allow_fallbacks = false
+
 [agent]
 max_turns = 100
 

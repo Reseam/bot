@@ -1,3 +1,4 @@
+import { fileOperation } from "./files.js";
 import {
   Bash,
   type ByteString,
@@ -18,7 +19,7 @@ import { posix } from "node:path";
 import { request, send } from "./bridge.js";
 import type { BridgeCommand, ExecRequest, ExecResult, FetchResponse, Image } from "./protocol.js";
 
-const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp"];
+const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp", "archive"];
 const REPO_OVERLAY_BYTES = 256 * 1024 * 1024;
 const BINARY_MIN_SUSPICIOUS_CHARS = 8;
 const MAX_EXECUTION_MS = 30 * 60 * 1000;
@@ -141,7 +142,11 @@ async function create(message: ExecRequest): Promise<Sandbox> {
   const member = new Bash({
     ...shared,
     fs: await filesystem(workspace),
-    customCommands: [bridgeCommand(message.sandbox, "discord"), viewCommand(images)],
+    customCommands: [
+      bridgeCommand(message.sandbox, "discord"),
+      bridgeCommand(message.sandbox, "archive"),
+      viewCommand(images),
+    ],
   });
   return { team, member, images, tail: Promise.resolve() };
 }
@@ -159,6 +164,7 @@ function bridgeCommand(sandbox: number, name: BridgeCommand): Command {
     const result = await request(
       { type: "call", sandbox, command: name, args, stdin: decodeBytesToUtf8(ctx.stdin) },
       ctx.signal,
+      (request) => fileOperation(ctx, request),
     );
     if ("error" in result) {
       return { stdout: "", stderr: `${name}: ${result.error}\n`, exitCode: 1 };

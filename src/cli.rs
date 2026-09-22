@@ -1,12 +1,13 @@
 use std::iter::once;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::chat::Run;
 
+mod archive;
 mod discord;
 mod mcp;
 mod repo;
@@ -17,6 +18,7 @@ pub enum BridgeCommand {
     Discord,
     Repo,
     Mcp,
+    Archive,
 }
 
 #[derive(Default, Serialize)]
@@ -59,13 +61,29 @@ pub async fn run(
     command: BridgeCommand,
     args: Vec<String>,
     stdin: String,
+    files: &mut crate::sandbox::files::Files,
 ) -> CommandOutput {
     let result = match command {
-        BridgeCommand::Discord => discord::run(run, args, stdin).await,
+        BridgeCommand::Discord => discord::run(run, args, stdin, files).await,
         BridgeCommand::Repo => repo::run(run, args).await,
         BridgeCommand::Mcp => mcp::run(run, args).await,
+        BridgeCommand::Archive => archive::run(args, files).await,
     };
     result.unwrap_or_else(|error| CommandOutput::failure(format!("error: {error:#}\n"), 1))
+}
+
+fn filename(name: &str) -> Result<&str> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\', ':'])
+        || name.chars().any(char::is_control)
+    {
+        bail!(
+            "filename must be a nonempty name without path separators, colons, or control characters"
+        );
+    }
+    Ok(name)
 }
 
 fn parse<T: Parser>(name: &str, args: Vec<String>) -> Result<T, CommandOutput> {
