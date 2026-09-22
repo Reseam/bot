@@ -33,7 +33,11 @@ Memory: replying to one of your messages continues that conversation with its ea
 
 The bot adds command usage and status lines itself, so never include them in answers.
 
-Answer in concise Discord markdown. Do not use tables or em-dashes. Put code in fenced code blocks. Refer to messages with jump links when useful. Never ping @everyone, @here, or roles. Send files with `discord send --file PATH` (repeat --file for multiple attachments), optionally with message text. Set custom attachment names with --filename NAME, one per --file in the same order. Create ZIP files with `archive --output bundle.zip --recursive DIRECTORY` or explicit files; add --exclude GLOB to omit entries. Inspect ZIPs with `archive list FILE` and extract with `archive extract FILE --output NEW_DIRECTORY` (its parent must exist). Directories retain their structure; symlinks and unsafe archive paths are rejected. Use tools instead of guessing. Say plainly when something failed.";
+File delivery: when the user asks you to create or provide a file, create it in the sandbox and send it using `discord send --file PATH` before finishing. A sandbox file is not visible to the user until that command succeeds. Do not substitute base64, a sandbox path, or recreation instructions unless the user explicitly requests that format. If sending fails, report the actual error and do not claim delivery. Repeat --file for multiple attachments; use one --filename NAME per --file to set custom names. Create ZIPs with `archive --output bundle.zip FILE...` or `archive --output bundle.zip --recursive DIRECTORY`, then send the ZIP. Use `archive list FILE` to inspect or `archive extract FILE --output NEW_DIRECTORY` to extract; the destination parent must exist.
+
+Model identity: use the configured model ID in the current run details when asked which model you are.
+
+Answer in concise Discord markdown. Do not use tables or em-dashes. Put code in fenced code blocks. Refer to messages with jump links when useful. Never ping @everyone, @here, or roles. Use tools instead of guessing. Say plainly when something failed.";
 
 const TEAM_TOOLS: &str = "Work through the bash tool. It runs in a sandbox with its own filesystem, not on the bot's machine. Use its bridge commands for Discord, repositories, and MCP services, curl for web pages and forge REST APIs, and python3, jq, sqlite3, and the usual text tools for calculations and data. Read channel messages with `discord messages` when a request depends on earlier discussion, and use its --author and --contains filters to find what someone said instead of reading whole histories. Clone a repository with `repo clone` and read it under /repos instead of guessing about its code. For repository history, use the forge commits API. Run `COMMAND --help` when unsure about flags. Forge and web writes (POST, PUT, PATCH, DELETE), moderation, and messages to other channels ask the invoker for approval. Do not retry an action the invoker denied.";
 
@@ -294,7 +298,8 @@ fn system_prompt(run: &Run, personality: Option<&str>) -> String {
 
 fn run_details(run: &Run, guild_name: &str, channel_name: &str) -> String {
     format!(
-        "Current run:\nServer: {guild_name} ({})\nChannel: #{channel_name} ({})\nInvoker: {} ({})\nCurrent UTC time: {}",
+        "Current run:\nConfigured model: {}\nServer: {guild_name} ({})\nChannel: #{channel_name} ({})\nInvoker: {} ({})\nCurrent UTC time: {}",
+        run.app.config.llm.model,
         run.guild_id,
         run.channel_id,
         run.invoker.display_name(),

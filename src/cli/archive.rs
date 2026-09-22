@@ -128,7 +128,7 @@ async fn create(args: Create, files: &mut Files) -> Result<CommandOutput> {
     .await
     .context("archive creation task failed")??;
     let mut output = CommandOutput::text(format!(
-        "Created {} ({count} entries, {size} bytes)",
+        "Created {} in the sandbox ({count} entries, {size} bytes). Use discord send --file to send it to Discord.",
         args.output
     ));
     output.file = Some(OutputFile {
