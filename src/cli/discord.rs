@@ -8,8 +8,11 @@ use super::{CommandOutput, parse};
 use crate::chat::Run;
 
 mod act;
+mod audit;
 mod moderation;
+mod poll;
 mod read;
+mod remind;
 mod send;
 mod server;
 
@@ -45,10 +48,17 @@ enum Command {
     React(act::React),
     /// Create a public thread
     Thread(act::Thread),
+    /// Post a Discord poll
+    Poll(poll::Poll),
     /// Pin a message
     Pin(act::Pin),
     /// Unpin a message
     Unpin(act::Pin),
+    /// Reminders for the person who asked
+    #[command(subcommand)]
+    Remind(remind::Remind),
+    /// Read the server audit log (team only)
+    Audit(audit::Audit),
     /// Moderation actions. Every action asks for approval
     #[command(subcommand)]
     Mod(moderation::Mod),
@@ -75,8 +85,11 @@ pub async fn run(
         Command::Send(args) => send::send(run, args, stdin, files).await,
         Command::React(args) => act::react(run, args).await,
         Command::Thread(args) => act::thread(run, args).await,
+        Command::Poll(args) => poll::poll(run, args).await,
         Command::Pin(args) => act::pin(run, args, true).await,
         Command::Unpin(args) => act::pin(run, args, false).await,
+        Command::Remind(command) => remind::run(run, command).await,
+        Command::Audit(args) => audit::audit(run, args).await,
         Command::Mod(command) => moderation::run(run, command).await,
     }
 }

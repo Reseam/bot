@@ -31,7 +31,7 @@ Moderation slash commands are separate and follow normal Discord permissions.
 
 The bot asks before doing anything with an effect outside the conversation:
 
-- posting in a different channel
+- posting a message or poll in a different channel
 - any moderation action
 - creating or changing things on Forgejo, GitHub, or other websites, including uploads
 
@@ -39,7 +39,8 @@ You get a card with **Approve**, **Approve for this run** (the same kind of acti
 
 ## What the team can ask for
 
-- **Discord:** read channels and threads, find what someone said, open attachments, send messages, react, create threads, pin, and moderate. Every action is checked against your own Discord permissions.
+- **Discord:** read channels and threads, find what someone said, open attachments, send messages, react, create threads, pin, post polls, set reminders for you ("remind me in 2h to review the PR"), and moderate. Every action is checked against your own Discord permissions.
+- **Audit log:** who did what on the server (bans, role changes, deleted messages, channel edits), filtered by person or action. Team only, and you need View Audit Log yourself.
 - **Forgejo:** search and read issues and pull requests, create and edit issues, comment, label, and attach screenshots or videos. Changes show up as the `reseam-bot` account, which has write access to api, patches, reseam, website, and manager.
 - **GitHub:** public data only.
 - **Code:** clone a repository and read or search it.
@@ -54,6 +55,7 @@ You get a card with **Approve**, **Approve for this run** (the same kind of acti
   - **Summarize from here**: that message and what came after it.
   - **Ask about this**: opens a form for your question about the message.
   - **Create issue** (team): drafts a Forgejo issue from the message and asks before creating it.
+- `/remind set`: posts a public confirmation, then the bot pings you in the same channel after a delay like `30m`, `2h`, or `3d` (up to 365 days, 25 pending per person). `/remind list` shows yours and `/remind cancel` removes one.
 - `/personality` (owners): extra tone and style instructions for the bot.
 - `/mcp status` (team): shows the connected external services, such as web search.
 

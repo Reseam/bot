@@ -14,6 +14,7 @@ mod llm;
 mod locks;
 mod mcp;
 mod moderation;
+mod reminders;
 mod sandbox;
 mod settings;
 #[cfg(test)]
@@ -114,6 +115,7 @@ async fn main() -> Result<()> {
             Box::pin(async move {
                 info!(user = %ready.user.name, user_id = %ready.user.id, "connected to Discord");
                 moderation::spawn_expired_bans(ctx.clone(), app.db.clone());
+                reminders::spawn(ctx.clone(), app.db.clone());
                 poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id)
                     .await
                     .context("failed to register guild commands")?;
