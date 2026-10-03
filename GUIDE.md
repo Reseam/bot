@@ -1,4 +1,8 @@
-# Reseam Bot guide
+<p align="center">
+  <img src="https://reseam.app/logo.svg" alt="Reseam logo" width="96">
+</p>
+
+<h1 align="center">Reseam Bot guide</h1>
 
 Reseam Bot is the AI assistant in the Reseam Discord server. It answers questions, reads and summarizes channels, and for the team it works with our repositories and Forgejo issues.
 
@@ -19,7 +23,7 @@ Moderation slash commands are separate and follow normal Discord permissions.
 - **Say what you mean.** It does not read the channel automatically. It looks back on its own when a request depends on earlier messages, so name the channel or time range when it matters: "summarize #dev from the last 3 hours".
 - **Attach files.** It reads images, PDFs, DOCX, and text files.
 - **Add details mid-run** by replying again. It picks them up at its next step.
-- If someone else replies to the same conversation while it is busy, their message gets ⏳ and runs afterwards.
+- If someone else replies to the same conversation while it is busy, their message gets ⏳ and runs afterward.
 
 ## While it works
 
@@ -41,7 +45,7 @@ You get a card with **Approve**, **Approve for this run** (the same kind of acti
 
 - **Discord:** read channels and threads, find what someone said, open attachments, send messages, react, create threads, pin, post polls, set reminders for you ("remind me in 2h to review the PR"), and moderate. Every action is checked against your own Discord permissions.
 - **Audit log:** who did what on the server (bans, role changes, deleted messages, channel edits), filtered by person or action. Team only, and you need View Audit Log yourself.
-- **Forgejo:** search and read issues and pull requests, create and edit issues, comment, label, and attach screenshots or videos. Changes show up as the `reseam-bot` account, which has write access to api, patches, reseam, website, and manager.
+- **Forgejo:** search and read issues and pull requests, create and edit issues, comment, label, and attach screenshots or videos. Changes show up as the `reseam-bot` account, which has write access to `api`, `patches`, `reseam`, `website`, and `manager`.
 - **GitHub:** public data only.
 - **Code:** clone a repository and read or search it.
 - **Web:** search the web and read pages.

@@ -1,20 +1,22 @@
-# Reseam Bot
+<p align="center">
+  <img src="https://reseam.app/logo.svg" alt="Reseam logo" width="96">
+</p>
 
-Discord bot for the Reseam team with a built-in AI agent, plus moderation commands.
+<h1 align="center">Reseam Bot</h1>
 
-New to the bot? Read [GUIDE.md](GUIDE.md) for a walkthrough of what it does and how to use it.
+The Discord bot for the Reseam server. It has an AI agent that answers questions, reads and summarizes channels, and works with Reseam's repositories and issues. It also has moderation commands.
 
-## Using it
+How to use it in Discord is in [GUIDE.md](GUIDE.md). This README covers running it.
 
-Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full agent. Member roles (`access.member_role_ids`) get a sandbox limited to `discord`, `archive`, `view`, and text tools: no web, MCP, repositories, forge APIs, python3, or js-exec, and no Create issue or `/mcp`. Moderation commands use normal Discord permissions instead.
+## Access
 
-- **Mention the bot** (or its role) or **reply to one of its messages**. It reads the message you replied to and any attached images, PDFs, DOCX, or text files, then streams its answer. It reads more of the channel on demand, and `agent.history_messages` (0 to 100, default 0) adds that many earlier messages up front. Press **Stop** to end a run; only the person who started it, owners, and members with Manage Messages can.
-- **Reply to its answer** to continue the same conversation. Earlier turns and command output are kept in SQLite. Conversations are summarized once they pass `agent.compact_at_tokens`.
-- **Reply to its message while it is still working** to steer the run. The bot reacts with 👀 when your message is picked up.
-- **Another member replying mid-run** is queued. The bot reacts with ⏳ and starts their turn once the current run finishes.
-- **Approvals.** Moderation, messages to other channels, HTTP requests other than GET and HEAD, and MCP tools listed under `approve` post an Approve / Approve for this run / Deny prompt, deleted once it is answered. Only the person who started the run can answer it. "Approve for this run" covers the same command against the same target, such as every `PATCH` to one host.
+- **Owners** (`access.owner_ids`) and **team roles** (`access.team_role_ids`) get the full agent.
+- **Member roles** (`access.member_role_ids`, the AI Access role) get chat, Discord, and file tools only: no web, repositories, forge APIs, MCP, Python, or JavaScript.
+- Moderation commands follow normal Discord permissions.
 
-### Commands
+Mention the bot or reply to it to start a run, and reply to its answer to continue. Actions with an effect outside the conversation ask the person who started the run to approve first: moderation, messages to other channels, HTTP requests other than GET and HEAD, and MCP tools listed under `approve`.
+
+## Commands
 
 | Command | Who | What |
 |---|---|---|
@@ -23,6 +25,7 @@ Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full
 | `Summarize from here` (message menu) | team | Summarize from a message to now |
 | `Ask about this` (message menu) | team | Ask a question about a message |
 | `Create issue` (message menu) | team | Draft an issue from a message and create it after approval |
+| `/remind set`, `/remind list`, `/remind cancel` | team | Ping yourself in the channel after a delay, list your reminders, or cancel one |
 | `/mcp status` | team | MCP server status and tools |
 | `/mcp reconnect server` | owners | Reconnect an MCP server |
 | `/personality` | owners | Write or clear extra instructions for the bot's tone and style |
@@ -33,27 +36,21 @@ Owners (`access.owner_ids`) and team roles (`access.team_role_ids`) get the full
 | `/slowmode`, `/lock`, `/unlock` | Manage Channels | `/lock` saves the channel's permissions and `/unlock` restores them |
 | `/modlog [channel]` | Manage Server | Set or show the moderation log channel |
 
-### The agent's sandbox
+## Sandbox
 
-The agent has one tool, `bash`. It runs in [just-bash](https://github.com/vercel-labs/just-bash), an emulated shell with its own filesystem, inside a Node service the bot starts (`sandbox/`). The shell cannot see the bot's files, environment, or network.
+The agent has one tool, `bash`. It runs in [just-bash](https://github.com/vercel-labs/just-bash), an emulated shell with its own filesystem, inside a Node service the bot starts (`sandbox/`). The shell can't see the bot's files, environment, or network.
 
-- `/workspace` is writable and belongs to the conversation. `/repos/<host>/<owner>/<name>` shows cloned repositories; edits there stay in memory.
-- Workspaces and clones unused for 8 hours are deleted.
-- Built-in tools include coreutils, `rg`, `jq`, `yq`, `sqlite3`, `python3` (standard library), `js-exec`, and `curl`.
-- `curl` reaches public hosts only. The bot adds forge tokens for requests to configured forge APIs, and asks for approval before any request that is not GET or HEAD.
+- `/workspace` belongs to the conversation. `/repos/<host>/<owner>/<name>` shows cloned repositories; edits there stay in memory. Both are deleted after 8 hours without use.
+- Built in: coreutils, `rg`, `jq`, `yq`, `sqlite3`, `python3` (standard library), `js-exec`, and `curl`. `curl` reaches public hosts only; the bot adds forge tokens for configured forge APIs.
+- Bridge commands run in the bot with the permissions of the person who asked:
+  - `discord`: read and send messages, attachments, threads, pins, polls, reminders, the audit log, and `discord mod` for moderation.
+  - `repo clone URL [--ref REF] [--history]`: clone or update an HTTPS repository.
+  - `mcp`: call tools from servers configured under `[mcp.*]`.
+  - `upload`: send a file's exact bytes to a URL (team only).
+  - `archive`: create, list, and extract ZIP files.
+  - `view FILE`: attach an image to the answer.
 
-Bridge commands run in the bot with the permissions of the person who asked:
-
-- `discord`: messages, attachments, channels, members, server info, send, react, threads, pins, and `discord mod` for moderation.
-- `repo clone URL [--ref REF] [--history]`: clone or update an HTTPS repository.
-- `mcp list`, `mcp SERVER TOOL --help`, `mcp SERVER TOOL key=value`: call tools from servers configured under `[mcp.*]`.
-- `upload [--form FIELD] [--method M] [--header 'K: V'] URL FILE`: send a file's exact bytes (team only). just-bash's curl sends request bodies as text, so binary uploads go through this.
-- `discord send --file PATH [--file PATH...] ["message"]`: send sandbox files as Discord attachments, optionally with text, `--reply`, or `--channel`. Paths resolve from the shell's current directory. Up to 10 files and 10 MiB combined per message; requires Attach Files permission. Other channels use the usual approval flow.
-- `discord send --file /tmp/result.csv --filename report.csv`: choose the attachment name without renaming the source. For multiple files, supply one `--filename` per `--file`, in the same order.
-- `archive --output bundle.zip --recursive project/`: create a compressed ZIP preserving folders and empty directories. Use repeatable `--exclude 'node_modules/**'` globs to omit entries. Accepts up to 256 entries / 64 MiB input, rejects symlinks and duplicate paths, and skips its own output file. Existing ZIP output is replaced. `archive create` is also accepted.
-- `archive list bundle.zip`: list ZIP entries and uncompressed sizes.
-- `archive extract bundle.zip --output extracted`: extract into a new sandbox directory whose parent already exists. Rejects unsafe paths, symlinks, special files, conflicting entries, and archives exceeding 256 entries / 64 MiB expanded size. ZIP files may be up to 128 MiB to allow for compression and metadata overhead. Existing destination directories are never overwritten. Available to both team and member runs; send archives with `discord send --file bundle.zip` (the normal upload limit still applies).
-- `view FILE`: attach an image from the sandbox to the result.
+Run any bridge command with `--help` for its flags and limits.
 
 ## Configuration
 
@@ -83,7 +80,7 @@ Notable settings in `config.toml`:
 - Invite with the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Embed Links, Attach Files, Read Message History, Add Reactions, Use External Emojis, Manage Messages, Pin Messages, Manage Threads, Manage Channels, Manage Roles, Kick Members, Ban Members, Moderate Members (permission integer `2253226011651158`).
 - Moderating a member requires the bot's highest role to be above the member's highest role. The bot reads a private thread only when it has been added to it and the person asking is a member.
 
-## Running locally
+## Run locally
 
 ```sh
 cp .env.example .env   # fill it in
@@ -93,6 +90,6 @@ cargo run
 
 `cargo test` runs the unit and mock-server tests. `cargo test -- --ignored` also runs live tests against the configured LLM and Exa.
 
-## Deployment
+## Deploy
 
-Pushing to `main` runs `.forgejo/workflows/release.yml` on the NAS runner. It builds the binary and the sandbox with the toolchain, cargo, and npm caches, uploads them with `config.toml` as `reseam-bot-linux-x64.tar.gz` to the rolling `latest` release, and calls the Dokploy deploy webhook. Dokploy builds the `Dockerfile`, which installs git on `node:24-trixie-slim` and unpacks that release. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
+Pushing to `main` builds the bot and the sandbox on the Forgejo runner and uploads them, with `config.toml`, as `reseam-bot-linux-x64.tar.gz` to the rolling `latest` release. CI then calls the Dokploy deploy webhook. Dokploy builds the `Dockerfile`, which unpacks that release on `node:24-trixie-slim`. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
