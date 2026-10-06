@@ -93,3 +93,7 @@ cargo run
 ## Deploy
 
 Pushing to `main` builds the bot and the sandbox on the Forgejo runner and uploads them, with `config.toml`, as `reseam-bot-linux-x64.tar.gz` to the rolling `latest` release. CI then calls the Dokploy deploy webhook. Dokploy builds the `Dockerfile`, which unpacks that release on `node:24-trixie-slim`. Production environment variables live on the `bot` application in Dokploy, and the `bot-data` volume is mounted at `/var/lib/reseam-bot`.
+
+## License
+
+AGPL-3.0-or-later, with additional terms under section 7 in [NOTICE](NOTICE).
