@@ -17,6 +17,7 @@ mod moderation;
 mod reminders;
 mod sandbox;
 mod settings;
+mod storage;
 #[cfg(test)]
 mod test_support;
 mod text;
@@ -35,6 +36,7 @@ use crate::config::Config;
 use crate::llm::Llm;
 use crate::locks::KeyedLocks;
 use crate::sandbox::Sandbox;
+use crate::storage::Storage;
 
 pub type Error = anyhow::Error;
 pub type Data = Arc<App>;
@@ -49,6 +51,7 @@ pub struct App {
     pub repo_locks: KeyedLocks<PathBuf>,
     pub mcp: mcp::Mcp,
     pub sandbox: Sandbox,
+    pub storage: Option<Storage>,
 }
 
 #[tokio::main]
@@ -76,6 +79,7 @@ async fn main() -> Result<()> {
         .map(|(name, config)| forge::Forge::new(name, config))
         .collect::<Result<Vec<_>>>()?;
     let sandbox = Sandbox::new(&config.sandbox)?;
+    let storage = config.storage.clone().map(Storage::new).transpose()?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(120))
@@ -91,6 +95,7 @@ async fn main() -> Result<()> {
         repo_locks: KeyedLocks::default(),
         mcp,
         sandbox,
+        storage,
     });
     cleanup::spawn(app.clone());
     info!(data_dir = %app.config.data_dir.display(), "configuration loaded");

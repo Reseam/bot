@@ -7,6 +7,7 @@ use tracing::{error, info};
 
 use crate::App;
 use crate::sandbox::{repos_dir, workspaces_dir};
+use crate::storage::LINK_TTL;
 
 const INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 const IDLE: Duration = Duration::from_secs(8 * 60 * 60);
@@ -58,6 +59,10 @@ async fn sweep(app: &App) -> Result<()> {
         removed += 1;
     }
     info!(removed, "cleaned up idle sandbox files");
+    if let Some(storage) = &app.storage {
+        let removed = storage.sweep(LINK_TTL).await?;
+        info!(removed, "cleaned up expired shared files");
+    }
     Ok(())
 }
 

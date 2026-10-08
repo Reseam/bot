@@ -11,6 +11,7 @@ mod archive;
 mod discord;
 mod mcp;
 mod repo;
+mod share;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -19,6 +20,7 @@ pub enum BridgeCommand {
     Repo,
     Mcp,
     Archive,
+    Share,
 }
 
 #[derive(Default, Serialize)]
@@ -68,6 +70,7 @@ pub async fn run(
         BridgeCommand::Repo => repo::run(run, args).await,
         BridgeCommand::Mcp => mcp::run(run, args).await,
         BridgeCommand::Archive => archive::run(args, files).await,
+        BridgeCommand::Share => share::run(run, args),
     };
     result.unwrap_or_else(|error| CommandOutput::failure(format!("error: {error:#}\n"), 1))
 }

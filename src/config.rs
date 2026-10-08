@@ -27,8 +27,20 @@ pub struct Config {
     #[serde(default)]
     pub forges: BTreeMap<String, ForgeConfig>,
     pub sandbox: SandboxConfig,
+    pub storage: Option<StorageConfig>,
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageConfig {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -215,6 +227,9 @@ impl Config {
         config.data_dir = std::path::absolute(&config.data_dir)
             .context("failed to resolve data_dir to an absolute path")?;
         config.llm.validate()?;
+        if let Some(storage) = &config.storage {
+            storage.validate()?;
+        }
         if config.agent.history_messages > 100 {
             bail!("agent.history_messages must be between 0 and 100");
         }
@@ -222,6 +237,18 @@ impl Config {
             server.validate(name)?;
         }
         Ok(config)
+    }
+}
+
+impl StorageConfig {
+    fn validate(&self) -> Result<()> {
+        if !self.endpoint.starts_with("https://") {
+            bail!("storage.endpoint must be an https:// URL")
+        }
+        if self.prefix.is_empty() || !self.prefix.ends_with('/') || self.prefix.starts_with('/') {
+            bail!("storage.prefix must be a relative key prefix ending in '/'")
+        }
+        Ok(())
     }
 }
 

@@ -59,6 +59,14 @@ max_output_tokens = 64000
 [agent]
 max_turns = 100
 
+[storage]
+endpoint = "https://sf-objectstorage.com"
+region = "ca"
+bucket = "bucket-722-1280"
+prefix = "reseam-bot/shares/"
+access_key_id = "${STORAGE_ACCESS_KEY_ID}"
+secret_access_key = "${STORAGE_SECRET_ACCESS_KEY}"
+
 [forges.forgejo]
 kind = "forgejo"
 url = "${FORGEJO_URL}"

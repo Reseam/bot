@@ -2,12 +2,15 @@ import base64
 import json
 import os
 import socket
+import subprocess
 import sys
 
 FETCH_USAGE = """usage: fetch [--method METHOD] [--header 'Name: value']... [--body FILE] URL
 Make an HTTP request through the bot. Requests to configured forge APIs are authenticated.
 --body - reads the body from stdin. Prints the response body and exits 22 on an HTTP error status."""
 VIEW_USAGE = "usage: view FILE..."
+SHARE_USAGE = """usage: share FILE
+Upload FILE and print a download link that works for 24 hours. Use it for files too large for discord send."""
 
 
 def exchange(request):
@@ -93,6 +96,33 @@ def fetch(args):
     return 0
 
 
+def share(args):
+    if len(args) != 1 or args[0] in ("--help", "-h"):
+        sys.stdout.write(SHARE_USAGE + "\n")
+        return 0 if args in (["--help"], ["-h"]) else 2
+    path = args[0]
+    if not os.path.isfile(path):
+        return fail("share", f"{path}: not a regular file")
+    reply = exchange({"type": "call", "command": "share", "args": [os.path.basename(path)], "stdin": ""})
+    if "error" in reply:
+        return fail("share", reply["error"])
+    output = reply["command"]
+    if output["exit_code"] != 0:
+        sys.stderr.write(output["stderr"])
+        return output["exit_code"]
+    urls = json.loads(output["stdout"])
+    upload = subprocess.run(
+        ["curl", "-fsS", "--retry", "3", "-T", path, urls["upload"]],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if upload.returncode != 0:
+        return fail("share", f"upload failed: {upload.stderr.strip()}")
+    sys.stdout.write(urls["download"] + "\n")
+    return 0
+
+
 def call(name, args):
     stdin = "" if sys.stdin.isatty() else sys.stdin.read()
     reply = exchange({"type": "call", "command": name, "args": args, "stdin": stdin})
@@ -116,6 +146,8 @@ def main():
         return view(args)
     if name == "fetch":
         return fetch(args)
+    if name == "share":
+        return share(args)
     return call(name, args)
 
 

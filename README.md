@@ -60,6 +60,7 @@ Run any bridge command with `--help` for its flags and limits.
 
 - The `discord`, `mcp`, `view`, and `fetch` bridge commands work through a relay in the container. `fetch` replaces curl for forge APIs: it adds forge tokens and asks for approval on writes. Plain curl and git in the container are unauthenticated.
 - APKs come from Discord uploads (`discord attachment MESSAGE --url` prints a download link) or links. APK mirrors block Modal's addresses.
+- `share FILE` delivers files over Discord's 10 MB limit, such as patched APKs. The bot signs a 15-minute upload URL, the container uploads directly to the `[storage]` bucket, and the bot prints a download link that works for 24 hours. The container never holds storage keys, and the cleanup task deletes shared files after 24 hours.
 - A conversation's container starts on its first command, is snapshotted and stopped when the run ends, and is restored on the next run. Snapshots expire 8 hours after the run that made them.
 
 ## Configuration
@@ -75,6 +76,7 @@ Run any bridge command with `--help` for its flags and limits.
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Any OpenAI-compatible Chat Completions endpoint, the `openrouter` provider |
 | `ANTHROPIC_API_KEY` | Claude API key from the Claude Console, the `anthropic` provider |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | Modal token for the real sandbox |
+| `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY` | S3-compatible storage key for `share` |
 | `FORGEJO_URL`, `FORGEJO_TOKEN`, `GITHUB_TOKEN` | Forge access; without a token, only public data works |
 | `EXA_API_KEY` | Exa MCP server |
 | `SANDBOX_ENTRY` | Path to the built sandbox service (default `sandbox/dist/main.js`) |
@@ -84,6 +86,7 @@ Notable settings in `config.toml`:
 - `[llm]` `default_model` is the `provider/model-id` used until `/model` picks another. Each `[llm.providers.<name>]` has a `kind` (`openai` for Chat Completions endpoints, `anthropic` for the Claude Messages API), `base_url`, `api_key`, and a `models` list. Each model's `context_window` and `max_output_tokens` must match the model. Set `vision = false` for models without image input. A model's `extra_body` is merged into every request, e.g. `extra_body = { reasoning = { effort = "medium" } }`, or `extra_body.output_config = { effort = "high" }` for Claude. Claude requests cache the system prompt and the conversation for an hour, so replies within that hour reread the conversation from cache.
 - `[agent]` `max_turns` (default 100; the last step has no tools and must answer), `history_messages` (0 to 100, default 0), `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
 - `[sandbox.modal]` (optional) enables the real sandbox: `token_id`, `token_secret`, the Modal `app`, the published `image` name, and the `cpu` cores and `memory_mib` each container reserves. Build and publish the image once, and again after changing `sandbox/image/Dockerfile`: `npm --prefix sandbox run build && node --env-file=.env sandbox/dist/image.js reseam-bot reseam-android`.
+- `[storage]` (optional) enables `share`: an S3-compatible `endpoint`, `region`, `bucket`, a key `prefix` ending in `/` that the bot owns, and the access keys.
 - `[forges.<name>]` `kind` (`github` or `forgejo`), `url`, `token`, optional `default_repo`.
 - `[mcp.<name>]` either `url` (streamable HTTP, optional `headers`) or `command` with `args` and `env` (stdio). Optional `tools` allowlist, `approve` list, and `timeout_secs`.
 

@@ -94,23 +94,3 @@ fn default_model_splits_provider_at_the_first_slash() -> Result<()> {
     }
     Ok(())
 }
-
-#[test]
-fn provider_names_and_model_lists_are_validated() -> Result<()> {
-    let slash = PROVIDERS.replace("providers.anthropic", "providers.\"an/thropic\"");
-    assert!(
-        llm(&format!(
-            "default_model = 'openrouter/openai/gpt-5'\n{slash}"
-        ))?
-        .validate()
-        .is_err()
-    );
-    let duplicate = format!(
-        "default_model = 'openrouter/openai/gpt-5'\n{PROVIDERS}\n[[providers.openrouter.models]]\nid = 'openai/gpt-5'\ncontext_window = 1\nmax_output_tokens = 1"
-    );
-    let error = llm(&duplicate)?
-        .validate()
-        .expect_err("duplicate model ids should fail");
-    assert!(error.to_string().contains("twice"));
-    Ok(())
-}

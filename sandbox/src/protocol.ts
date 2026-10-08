@@ -1,4 +1,4 @@
-export type BridgeCommand = "discord" | "repo" | "mcp" | "archive";
+export type BridgeCommand = "discord" | "repo" | "mcp" | "archive" | "share";
 
 export interface ModalSettings {
   token_id: string;
