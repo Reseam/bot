@@ -21,11 +21,21 @@ RUN mkdir -p /opt/android \
         printf '#!/bin/sh\nexec java -jar /opt/android/%s.jar "$@"\n' "$tool" > "/usr/local/bin/$tool"; \
         chmod +x "/usr/local/bin/$tool"; \
     done
-RUN curl -fsSL -o /tmp/build-tools.zip https://dl.google.com/android/repository/build-tools_r36_linux.zip \
-    && unzip -q /tmp/build-tools.zip -d /tmp/build-tools \
-    && mv /tmp/build-tools/* /opt/android/build-tools \
-    && rm -rf /tmp/build-tools /tmp/build-tools.zip
-ENV PATH=/opt/android/build-tools:$PATH
+RUN curl -fsSL -o /tmp/temurin17.tar.gz https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz \
+    && echo "3808d1d15e3ec6bd5b84057fb5d84c33d8a1536a258146bcea2e603fc726e08e  /tmp/temurin17.tar.gz" | sha256sum -c - \
+    && mkdir -p /usr/lib/jvm/temurin-17 \
+    && tar -xzf /tmp/temurin17.tar.gz -C /usr/lib/jvm/temurin-17 --strip-components=1 \
+    && rm /tmp/temurin17.tar.gz
+ENV ANDROID_HOME=/opt/android-sdk
+RUN curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip \
+    && echo "e025545c62a8e64c7559119566a569fb1dec5f60  /tmp/cmdline-tools.zip" | sha1sum -c - \
+    && unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools \
+    && mkdir -p "$ANDROID_HOME/cmdline-tools" \
+    && mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm -rf /tmp/cmdline-tools /tmp/cmdline-tools.zip \
+    && "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses < <(yes) > /dev/null \
+    && "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+ENV PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/build-tools/36.0.0:$PATH
 RUN curl -fsSL https://github.com/coursier/coursier/releases/download/v2.1.25/cs-x86_64-pc-linux.gz \
         | gzip -d > /tmp/coursier \
     && chmod +x /tmp/coursier \
@@ -36,4 +46,13 @@ RUN curl -fsSL https://github.com/coursier/coursier/releases/download/v2.1.25/cs
     && printf '#!/bin/sh\nexec java -cp "/opt/smali/lib/*" com.android.tools.smali.smali.Main "$@"\n' > /usr/local/bin/smali \
     && printf '#!/bin/sh\nexec java -cp "/opt/smali/lib/*" com.android.tools.smali.baksmali.Main "$@"\n' > /usr/local/bin/baksmali \
     && chmod +x /usr/local/bin/smali /usr/local/bin/baksmali
+RUN git clone --depth 1 https://git.reseam.app/reseam/patches /tmp/patches \
+    && version=$(curl -fsS https://git.reseam.app/api/v1/repos/reseam/reseam/releases/latest | jq -er .tag_name) \
+    && curl -fsSL -o /tmp/reseam "https://git.reseam.app/reseam/reseam/releases/download/$version/reseam-linux-x64" \
+    && chmod +x /tmp/reseam \
+    && /tmp/reseam bundle keygen --out /tmp/bundle.key \
+    && cd /tmp/patches \
+    && RESEAM_BIN=/tmp/reseam RESEAM_BUNDLE_KEY=/tmp/bundle.key ./gradlew bundle --no-daemon --quiet \
+    && cd / \
+    && rm -rf /tmp/patches /tmp/reseam /tmp/bundle.key* /root/.gradle/daemon
 WORKDIR /workspace

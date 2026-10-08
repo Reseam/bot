@@ -46,9 +46,9 @@ const MODAL_DESCRIPTION: &str = "Run a bash script as root in this conversation'
 
 Paths: /workspace is the working directory.
 
-Installed: git, curl, jq, zip, unzip, ripgrep, sqlite3, python3 with pip and uv, node with npm, build-essential, and Java 21.
-Android: jadx, apktool, baksmali, smali, apkid, bundletool, aapt2, apksigner, zipalign, d8, dexdump, apkeditor (merge split bundles: `apkeditor m -i in.apkm -o out.apk`), and dextools (fast dex search: search-string, search-strings, search-class, dump-class, dump-method, xref).
-Reseam: the latest `reseam` CLI and patches bundle, updated at the start of each run. The bundle is /opt/reseam/reseam-patches.reseam, its patch list is /opt/reseam/patches.json, and `--trust \"$(cat /opt/reseam/public-key)\"` trusts its signer.
+Installed: git, curl, jq, zip, unzip, ripgrep, sqlite3, python3 with pip and uv, node with npm, build-essential, Java 21 (default) and 17 (/usr/lib/jvm/temurin-17), and the Android SDK at $ANDROID_HOME with platform 36, build-tools 36.0.0, and sdkmanager. Gradle's cache already holds the patches repository's build dependencies, so cloning https://git.reseam.app/reseam/patches and running `./gradlew bundle` works without setup; give it a key from `reseam bundle keygen --out key` through RESEAM_BUNDLE_KEY.
+Android: jadx, apktool, baksmali, smali, apkid, bundletool, aapt2, apksigner, zipalign, d8, dexdump, apkeditor, and dextools (fast dex search: search-string, search-strings, search-class, dump-class, dump-method, xref).
+Reseam: the latest `reseam` CLI and patches bundle, updated at the start of each run. `reseam patch` takes .apk, .apkm, and .xapk files directly and loose splits with --split, so never merge split APKs before patching. The bundle is /opt/reseam/reseam-patches.reseam, its patch list is /opt/reseam/patches.json, and `--trust \"$(cat /opt/reseam/public-key)\"` trusts its signer.
 
 Bridge commands (run `COMMAND --help` for details):
 - discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord poll` posts a real Discord poll; `discord remind set|list|cancel` manages the invoker's reminders; `discord audit` reads the server audit log (filter with --user and --action); `discord mod` for moderation.

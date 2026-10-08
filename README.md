@@ -56,7 +56,7 @@ Run any bridge command with `--help` for its flags and limits.
 
 ### Real sandbox
 
-`/sandbox modal` switches team runs to a real Linux container on [Modal](https://modal.com). Members always get just-bash. The container has full network access and no credentials, and runs the image in `sandbox/image/Dockerfile`: Java 21, Python with uv, Node, git, and the Android tools jadx, apktool, smali, baksmali, dextools, apkeditor, bundletool, apkid, and build-tools 36. At the start of each run it installs the latest `reseam` CLI and patches bundle under `/opt/reseam`.
+`/sandbox modal` switches team runs to a real Linux container on [Modal](https://modal.com). Members always get just-bash. The container has full network access and no credentials, and runs the image in `sandbox/image/Dockerfile`: Java 21 and 17, Python with uv, Node, git, the Android SDK (platform 36, build-tools 36), the Android tools jadx, apktool, smali, baksmali, dextools, apkeditor, bundletool, and apkid, and a Gradle cache warmed by building the patches repository. At the start of each run it installs the latest `reseam` CLI and patches bundle under `/opt/reseam`.
 
 - The `discord`, `mcp`, `view`, and `fetch` bridge commands work through a relay in the container. `fetch` replaces curl for forge APIs: it adds forge tokens and asks for approval on writes. Plain curl and git in the container are unauthenticated.
 - APKs come from Discord uploads (`discord attachment MESSAGE --url` prints a download link) or links. APK mirrors block Modal's addresses.
