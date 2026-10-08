@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use poise::serenity_prelude as serenity;
 use sqlx::SqlitePool;
 
+use crate::access::Tier;
 use crate::db::{discord_id, stored_discord_id};
 use crate::sandbox::SandboxKind;
 
@@ -66,27 +67,45 @@ pub async fn set_personality(
     Ok(())
 }
 
-pub async fn model(db: &SqlitePool, guild_id: serenity::GuildId) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar::<_, Option<String>>(
-        "SELECT model FROM guild_settings WHERE guild_id = ?",
-    )
-    .bind(discord_id(guild_id.get())?)
-    .fetch_optional(db)
-    .await
-    .context("failed to read model")?
-    .flatten())
+pub async fn model(
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+    tier: Tier,
+) -> Result<Option<String>> {
+    let query = match tier {
+        Tier::Team => "SELECT team_model FROM guild_settings WHERE guild_id = ?",
+        Tier::Member => "SELECT member_model FROM guild_settings WHERE guild_id = ?",
+    };
+    Ok(sqlx::query_scalar::<_, Option<String>>(query)
+        .bind(discord_id(guild_id.get())?)
+        .fetch_optional(db)
+        .await
+        .context("failed to read model")?
+        .flatten())
 }
 
-pub async fn set_model(db: &SqlitePool, guild_id: serenity::GuildId, model: &str) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO guild_settings (guild_id, model) VALUES (?, ?) \
-         ON CONFLICT(guild_id) DO UPDATE SET model = excluded.model",
-    )
-    .bind(discord_id(guild_id.get())?)
-    .bind(model)
-    .execute(db)
-    .await
-    .context("failed to save model")?;
+pub async fn set_model(
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+    tier: Tier,
+    model: &str,
+) -> Result<()> {
+    let query = match tier {
+        Tier::Team => {
+            "INSERT INTO guild_settings (guild_id, team_model) VALUES (?, ?) \
+             ON CONFLICT(guild_id) DO UPDATE SET team_model = excluded.team_model"
+        }
+        Tier::Member => {
+            "INSERT INTO guild_settings (guild_id, member_model) VALUES (?, ?) \
+             ON CONFLICT(guild_id) DO UPDATE SET member_model = excluded.member_model"
+        }
+    };
+    sqlx::query(query)
+        .bind(discord_id(guild_id.get())?)
+        .bind(model)
+        .execute(db)
+        .await
+        .context("failed to save model")?;
     Ok(())
 }
 

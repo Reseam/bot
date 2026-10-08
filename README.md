@@ -29,7 +29,7 @@ Mention the bot or reply to it to start a run, and reply to its answer to contin
 | `/mcp status` | team | MCP server status and tools |
 | `/mcp reconnect server` | owners | Reconnect an MCP server |
 | `/personality` | owners | Write or clear extra instructions for the bot's tone and style |
-| `/model [model]` | owners | Show the AI model, or switch it for new runs. Models are named `provider/model-id` |
+| `/model [tier] [model]` | owners | Show the AI models, or switch the model for team or member runs. Models are named `provider/model-id` |
 | `/sandbox [kind]` | team | Show or switch where team runs execute commands: `just-bash` or `modal` |
 | `/warn`, `/timeout`, `/untimeout` | Moderate Members | |
 | `/kick` | Kick Members | |

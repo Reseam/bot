@@ -9,6 +9,7 @@ use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::access::Tier;
 use crate::agent::{Agent, AgentEvent, CompactionSettings};
 use crate::llm::{Message, Model, clear_replay};
 use crate::sandbox::SandboxKind;
@@ -92,7 +93,8 @@ pub async fn start_new(app: &Arc<App>, discord: &serenity::Context, new_run: New
         .try_lock(conversation_id)
         .expect("a newly created conversation has no other lock holder");
     let reply_to = new_run.input.addressed_id;
-    let model = guild_model(app, new_run.guild_id).await;
+    let tier = access::tier(&app.config, new_run.invoker.user.id, &new_run.invoker.roles);
+    let model = guild_model(app, new_run.guild_id, tier).await;
     let transcript = context::build(
         app,
         discord,
@@ -271,8 +273,8 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
     drop(lock);
 }
 
-pub async fn guild_model(app: &App, guild_id: serenity::GuildId) -> Arc<Model> {
-    let selected = settings::model(&app.db, guild_id)
+pub async fn guild_model(app: &App, guild_id: serenity::GuildId, tier: Tier) -> Arc<Model> {
+    let selected = settings::model(&app.db, guild_id, tier)
         .await
         .unwrap_or_else(|error| {
             error!(error = %format!("{error:#}"), %guild_id, "failed to read model");

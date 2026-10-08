@@ -6,7 +6,7 @@ use tokio::sync::OwnedMutexGuard;
 use tracing::{debug, error, info};
 
 use super::{NewRun, RunRequest, context, guild_model, run, start_new};
-use crate::access::has_ai_access;
+use crate::access::{self, has_ai_access};
 use crate::{App, conversations};
 
 const QUEUED: &str = "⏳";
@@ -127,7 +127,8 @@ async fn continue_conversation(
         .guild_id
         .context("continued conversation message has no guild")?;
     let conversation = conversations::load(&app.db, conversation_id).await?;
-    let model = guild_model(app, guild_id).await;
+    let tier = access::tier(&app.config, member.user.id, &member.roles);
+    let model = guild_model(app, guild_id, tier).await;
     let last_message_id = conversation
         .last_message_id
         .context("continued conversation has no mapped Discord messages")?;

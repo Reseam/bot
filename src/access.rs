@@ -4,6 +4,22 @@ use poise::serenity_prelude::{RoleId, UserId};
 use crate::config::Config;
 use crate::{Data, Error};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, poise::ChoiceParameter)]
+pub enum Tier {
+    #[name = "team"]
+    Team,
+    #[name = "members"]
+    Member,
+}
+
+pub fn tier(config: &Config, user_id: UserId, roles: &[RoleId]) -> Tier {
+    if is_team(config, user_id, roles) {
+        Tier::Team
+    } else {
+        Tier::Member
+    }
+}
+
 pub fn is_team(config: &Config, user_id: UserId, roles: &[RoleId]) -> bool {
     config.access.owner_ids.contains(&user_id) || has_any(roles, &config.access.team_role_ids)
 }

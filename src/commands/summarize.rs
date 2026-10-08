@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result, bail};
 use poise::serenity_prelude as serenity;
 
 use super::post_anchor;
+use crate::access;
 use crate::chat::{self, context::ContextInput, context::format_message};
 use crate::discord::{History, jump_link, read_channel, require_permissions, send_permission};
 use crate::text::parse_duration;
@@ -50,7 +51,7 @@ async fn summarize(
         DEFAULT_MESSAGES
     });
 
-    let budget = context_budget(ctx, guild_id).await;
+    let budget = context_budget(ctx, &member).await;
     let mut history = History::before(target.id, None);
     let mut collected = Vec::new();
     let mut size = 0;
@@ -99,7 +100,7 @@ async fn summarize_from_here(ctx: Context<'_>, message: serenity::Message) -> Re
     )
     .await?;
 
-    let budget = context_budget(ctx, guild_id).await;
+    let budget = context_budget(ctx, &member).await;
     let first = format_message(ctx.serenity_context(), guild_id, &message);
     let mut size = first.chars().count();
     let mut collected = vec![first];
@@ -263,8 +264,10 @@ async fn launch(
     Ok(())
 }
 
-async fn context_budget(ctx: Context<'_>, guild_id: serenity::GuildId) -> usize {
-    let model = chat::guild_model(ctx.data(), guild_id).await;
+async fn context_budget(ctx: Context<'_>, member: &serenity::Member) -> usize {
+    let app = ctx.data();
+    let tier = access::tier(&app.config, member.user.id, &member.roles);
+    let model = chat::guild_model(app, member.guild_id, tier).await;
     usize::try_from(model.config.context_window).unwrap_or(usize::MAX)
 }
 
