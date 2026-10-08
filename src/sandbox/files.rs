@@ -5,7 +5,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::{Process, ToNode};
+use super::process::Process;
+use super::protocol::ToNode;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]

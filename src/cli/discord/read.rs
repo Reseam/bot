@@ -66,6 +66,9 @@ pub struct Attachment {
     /// Save the original file to this path instead of printing its text
     #[arg(short, long)]
     output: Option<String>,
+    /// Print a temporary download URL for the original file instead
+    #[arg(long, conflicts_with = "output")]
+    url: bool,
 }
 
 pub async fn messages(run: &Arc<Run>, args: Messages) -> Result<CommandOutput> {
@@ -251,6 +254,9 @@ pub async fn attachment(run: &Arc<Run>, args: Attachment) -> Result<CommandOutpu
         .attachments
         .get(args.index)
         .with_context(|| format!("message has no attachment at index {}", args.index))?;
+    if args.url {
+        return Ok(CommandOutput::text(format!("{}\n", attachment.url)));
+    }
     let Some(path) = args.output else {
         let text = attachments::text(&run.app.http, attachment)
             .await

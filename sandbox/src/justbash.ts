@@ -17,11 +17,11 @@ import {
 import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { request, send } from "./bridge.js";
-import type { BridgeCommand, ExecRequest, ExecResult, FetchResponse, Image } from "./protocol.js";
+import { errorMessage, failure, textOrOmitted } from "./output.js";
+import type { BridgeCommand, ExecRequest, ExecResult, FetchResponse, Image, JustBashBackend } from "./protocol.js";
 
 const TEAM_BRIDGE_COMMANDS: BridgeCommand[] = ["discord", "repo", "mcp", "archive"];
 const REPO_OVERLAY_BYTES = 256 * 1024 * 1024;
-const BINARY_MIN_SUSPICIOUS_CHARS = 8;
 const MAX_EXECUTION_MS = 30 * 60 * 1000;
 const PYTHON_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -35,7 +35,7 @@ interface Sandbox {
 const sandboxes = new Map<number, Promise<Sandbox>>();
 const executions = new Map<number, AbortController>();
 
-export async function execute(message: ExecRequest): Promise<void> {
+export async function execute(message: ExecRequest<JustBashBackend>): Promise<void> {
   const controller = new AbortController();
   executions.set(message.id, controller);
   try {
@@ -58,12 +58,12 @@ export function close(sandbox: number): void {
   sandboxes.delete(sandbox);
 }
 
-async function run(sandbox: Sandbox, message: ExecRequest, cancelled: AbortSignal): Promise<ExecResult> {
+async function run(sandbox: Sandbox, message: ExecRequest<JustBashBackend>, cancelled: AbortSignal): Promise<ExecResult> {
   sandbox.images.length = 0;
   const timeout = AbortSignal.timeout(message.timeout_ms);
   const signal = AbortSignal.any([cancelled, timeout]);
   try {
-    const bash = message.team ? sandbox.team : sandbox.member;
+    const bash = message.backend.team ? sandbox.team : sandbox.member;
     const result = await bash.exec(message.command, { signal });
     const stderr = textOrOmitted(result.stderr);
     return {
@@ -84,26 +84,7 @@ function bytesOrOmitted(bytes: ByteString): string {
   return textOrOmitted(decodeBytesToUtf8(bytes), latin1FromBytes(bytes).length);
 }
 
-function textOrOmitted(text: string, bytes?: number): string {
-  let suspicious = 0;
-  for (const char of text) {
-    if (char === "\uFFFD" || (char < " " && char !== "\n" && char !== "\r" && char !== "\t" && char !== "\x1b")) {
-      suspicious++;
-    }
-  }
-  return suspicious >= BINARY_MIN_SUSPICIOUS_CHARS && suspicious * 10 > text.length ? omitted(bytes) : text;
-}
-
-function omitted(bytes: number | undefined): string {
-  const size = bytes === undefined ? "" : `: ${bytes} bytes`;
-  return `[binary output omitted${size}. Write binary data to a file with -o or > FILE instead of printing it.]\n`;
-}
-
-function failure(id: number, error: unknown, images: Image[]): ExecResult {
-  return { type: "exec_result", id, stdout: "", stderr: `${errorMessage(error)}\n`, exit_code: 1, images };
-}
-
-function open(message: ExecRequest): Promise<Sandbox> {
+function open(message: ExecRequest<JustBashBackend>): Promise<Sandbox> {
   const existing = sandboxes.get(message.sandbox);
   if (existing) {
     return existing;
@@ -114,12 +95,12 @@ function open(message: ExecRequest): Promise<Sandbox> {
   return created;
 }
 
-async function create(message: ExecRequest): Promise<Sandbox> {
-  const workspace = new ReadWriteFs({ root: message.workspace });
+async function create(message: ExecRequest<JustBashBackend>): Promise<Sandbox> {
+  const workspace = new ReadWriteFs({ root: message.backend.workspace });
   const teamFs = await filesystem(workspace);
   teamFs.mount(
     "/repos",
-    new OverlayFs({ root: message.repos, mountPoint: "/", maxMemoryBytes: REPO_OVERLAY_BYTES }),
+    new OverlayFs({ root: message.backend.repos, mountPoint: "/", maxMemoryBytes: REPO_OVERLAY_BYTES }),
   );
   const images: Image[] = [];
   const shared = {
@@ -326,8 +307,4 @@ function bridgeFetch(sandbox: number): SecureFetch {
       url: response.url,
     };
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

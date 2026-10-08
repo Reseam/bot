@@ -51,3 +51,66 @@ fn interpolation_uses_defaults_only_for_missing_variables() -> Result<()> {
     assert_eq!(table["empty_default"].as_str(), Some(""));
     Ok(())
 }
+
+fn llm(source: &str) -> Result<LlmConfig> {
+    Ok(toml::from_str(source)?)
+}
+
+const PROVIDERS: &str = r#"
+    [providers.openrouter]
+    kind = "openai"
+    base_url = "https://openrouter.ai/api/v1"
+    api_key = "key"
+    [[providers.openrouter.models]]
+    id = "openai/gpt-5"
+    context_window = 400000
+    max_output_tokens = 16000
+
+    [providers.anthropic]
+    kind = "anthropic"
+    base_url = "https://api.anthropic.com"
+    api_key = "key"
+    [[providers.anthropic.models]]
+    id = "claude-opus-5-5"
+    context_window = 1000000
+    max_output_tokens = 64000
+"#;
+
+#[test]
+fn default_model_splits_provider_at_the_first_slash() -> Result<()> {
+    llm(&format!(
+        "default_model = 'openrouter/openai/gpt-5'\n{PROVIDERS}"
+    ))?
+    .validate()?;
+    llm(&format!(
+        "default_model = 'anthropic/claude-opus-5-5'\n{PROVIDERS}"
+    ))?
+    .validate()?;
+    for unknown in ["anthropic/openai/gpt-5", "claude-opus-5-5", "openai/gpt-5"] {
+        let error = llm(&format!("default_model = '{unknown}'\n{PROVIDERS}"))?
+            .validate()
+            .expect_err("an unconfigured default model should fail");
+        assert!(error.to_string().contains(unknown));
+    }
+    Ok(())
+}
+
+#[test]
+fn provider_names_and_model_lists_are_validated() -> Result<()> {
+    let slash = PROVIDERS.replace("providers.anthropic", "providers.\"an/thropic\"");
+    assert!(
+        llm(&format!(
+            "default_model = 'openrouter/openai/gpt-5'\n{slash}"
+        ))?
+        .validate()
+        .is_err()
+    );
+    let duplicate = format!(
+        "default_model = 'openrouter/openai/gpt-5'\n{PROVIDERS}\n[[providers.openrouter.models]]\nid = 'openai/gpt-5'\ncontext_window = 1\nmax_output_tokens = 1"
+    );
+    let error = llm(&duplicate)?
+        .validate()
+        .expect_err("duplicate model ids should fail");
+    assert!(error.to_string().contains("twice"));
+    Ok(())
+}

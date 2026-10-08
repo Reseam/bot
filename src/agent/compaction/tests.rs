@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -5,8 +7,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 use super::*;
 use crate::agent::CompactionSettings;
+use crate::config::ProviderKind;
+use crate::llm::anthropic::ContentBlock;
 use crate::llm::{AssistantMessage, FunctionCall, ToolCall, ToolType};
-use crate::test_support::{llm_config, sse, user};
+use crate::test_support::{sse, test_model, user};
 
 fn settings(threshold: u64, keep_recent_tokens: u64) -> CompactionSettings {
     CompactionSettings {
@@ -18,7 +22,7 @@ fn settings(threshold: u64, keep_recent_tokens: u64) -> CompactionSettings {
     }
 }
 
-async fn summarizer() -> Result<(MockServer, Llm)> {
+async fn summarizer() -> Result<(MockServer, Arc<Model>)> {
     let server = MockServer::start().await;
     let body = sse(&[json!({
         "choices": [{"delta": {"content": "## Goal\nKeep helping"}, "finish_reason": "stop"}]
@@ -27,16 +31,16 @@ async fn summarizer() -> Result<(MockServer, Llm)> {
         .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
-    Ok((server, llm))
+    let model = test_model(ProviderKind::OpenAi, server.uri());
+    Ok((server, model))
 }
 
 #[tokio::test]
 async fn compaction_triggers_only_above_threshold() -> Result<()> {
-    let (server, llm) = summarizer().await?;
+    let (server, model) = summarizer().await?;
     let cancel = CancellationToken::new();
     let mut below = vec![user(&"a".repeat(40)), user(&"b".repeat(40))];
-    assert!(!compact_if_needed(&llm, &cancel, &mut below, None, &settings(20, 5)).await?);
+    assert!(!compact_if_needed(&model, &cancel, &mut below, None, &settings(20, 5)).await?);
     assert!(
         server
             .received_requests()
@@ -46,7 +50,7 @@ async fn compaction_triggers_only_above_threshold() -> Result<()> {
     );
 
     let mut above = vec![user(&"a".repeat(44)), user(&"b".repeat(40))];
-    assert!(compact_if_needed(&llm, &cancel, &mut above, None, &settings(20, 5)).await?);
+    assert!(compact_if_needed(&model, &cancel, &mut above, None, &settings(20, 5)).await?);
     assert_eq!(
         server
             .received_requests()
@@ -73,8 +77,7 @@ fn cut_never_starts_at_a_tool_result() {
                 },
                 extra_content: None,
             }],
-            reasoning_content: None,
-            reasoning: None,
+            ..AssistantMessage::default()
         }),
         Message::Tool {
             tool_call_id: "call".to_owned(),
@@ -89,13 +92,13 @@ fn cut_never_starts_at_a_tool_result() {
 
 #[tokio::test]
 async fn summary_replaces_older_messages_and_keeps_recent_verbatim() -> Result<()> {
-    let (_server, llm) = summarizer().await?;
+    let (_server, model) = summarizer().await?;
     let recent = user("recent message");
     let mut transcript = vec![user(&"old".repeat(100)), recent.clone()];
 
     assert!(
         compact_if_needed(
-            &llm,
+            &model,
             &CancellationToken::new(),
             &mut transcript,
             None,
@@ -116,14 +119,14 @@ async fn summary_replaces_older_messages_and_keeps_recent_verbatim() -> Result<(
 
 #[tokio::test]
 async fn previous_summary_uses_update_prompt() -> Result<()> {
-    let (server, llm) = summarizer().await?;
+    let (server, model) = summarizer().await?;
     let mut transcript = vec![
         user("<conversation-summary>\n## Goal\nOriginal\n</conversation-summary>"),
         user(&"new progress ".repeat(30)),
         user("recent"),
     ];
     compact_if_needed(
-        &llm,
+        &model,
         &CancellationToken::new(),
         &mut transcript,
         None,
@@ -146,7 +149,7 @@ async fn previous_summary_uses_update_prompt() -> Result<()> {
 
 #[tokio::test]
 async fn usage_estimate_counts_only_messages_appended_after_completion() -> Result<()> {
-    let (server, llm) = summarizer().await?;
+    let (server, model) = summarizer().await?;
     let mut transcript = vec![user(&"old".repeat(1_000)), user("recent")];
     let usage = ContextUsage {
         tokens: 10,
@@ -154,7 +157,7 @@ async fn usage_estimate_counts_only_messages_appended_after_completion() -> Resu
     };
     assert!(
         !compact_if_needed(
-            &llm,
+            &model,
             &CancellationToken::new(),
             &mut transcript,
             Some(&usage),
@@ -165,7 +168,7 @@ async fn usage_estimate_counts_only_messages_appended_after_completion() -> Resu
     transcript.push(user(&"appended".repeat(20)));
     assert!(
         compact_if_needed(
-            &llm,
+            &model,
             &CancellationToken::new(),
             &mut transcript,
             Some(&usage),
@@ -180,6 +183,38 @@ async fn usage_estimate_counts_only_messages_appended_after_completion() -> Resu
             .expect("request recording is enabled")
             .len(),
         1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn compaction_clears_anthropic_replay_from_kept_turns() -> Result<()> {
+    let (_server, model) = summarizer().await?;
+    let mut transcript = vec![
+        user(&"old".repeat(100)),
+        Message::Assistant(AssistantMessage {
+            content: Some("kept".to_owned()),
+            anthropic_content: vec![ContentBlock::Text {
+                text: "kept".to_owned(),
+            }],
+            ..AssistantMessage::default()
+        }),
+        user("recent message"),
+    ];
+
+    assert!(
+        compact_if_needed(
+            &model,
+            &CancellationToken::new(),
+            &mut transcript,
+            None,
+            &settings(1, 5),
+        )
+        .await?
+    );
+
+    assert!(
+        matches!(&transcript[1], Message::Assistant(message) if message.content.as_deref() == Some("kept") && message.anthropic_content.is_empty())
     );
     Ok(())
 }

@@ -6,8 +6,10 @@ use crate::discord::jump_link;
 use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
 use crate::{Data, Error};
 
+mod model;
 mod personality;
 mod remind;
+mod sandbox;
 mod summarize;
 
 type Command = poise::Command<Data, Error>;
@@ -18,8 +20,10 @@ pub fn all() -> Vec<Command> {
         ask(),
         create_issue(),
         mcp(),
+        model::model(),
         personality::personality(),
         remind::remind(),
+        sandbox::sandbox(),
     ];
     commands.extend(summarize::commands());
     commands.extend(crate::moderation::commands::all());

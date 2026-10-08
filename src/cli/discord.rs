@@ -32,7 +32,7 @@ enum Command {
     Messages(read::Messages),
     /// Show one message with its attachments, embeds, and reactions
     Message(read::Message),
-    /// Print an attachment's text, or save the original file with --output
+    /// Print an attachment's text, save the original file with --output, or print a download URL with --url
     Attachment(read::Attachment),
     /// List the categories, channels, and active threads you can see
     Channels,

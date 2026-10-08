@@ -61,6 +61,8 @@ You get a card with **Approve**, **Approve for this run** (the same kind of acti
   - **Create issue** (team): drafts a Forgejo issue from the message and asks before creating it.
 - `/remind set`: posts a public confirmation, then the bot pings you in the same channel after a delay like `30m`, `2h`, or `3d` (up to 365 days, 25 pending per person). `/remind list` shows yours and `/remind cancel` removes one.
 - `/personality` (owners): extra tone and style instructions for the bot.
+- `/model` (owners): shows the AI model, or switches it for new runs. Conversations keep their history when the model changes.
+- `/sandbox` (team): shows or switches where team runs execute commands. `just-bash` is an emulated shell. `modal` is a real Linux container with Android reversing tools and the latest `reseam` CLI. Upload an APK in Discord or give a link to work on one there. Members always use just-bash.
 - `/mcp status` (team): shows the connected external services, such as web search.
 
 ## Moderation commands

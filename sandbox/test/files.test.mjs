@@ -35,7 +35,7 @@ for (const team of [false, true]) {
         return JSON.parse(line.value);
       };
       try {
-        send({ type: "exec", id: 1, sandbox: 1, workspace, repos, team,
+        send({ type: "exec", id: 1, sandbox: 1, backend: { kind: "just-bash", workspace, repos, team },
           command: `mkdir -p /tmp/output; ln -s /workspace/project /tmp/link; cp binary.dat /tmp/output/copy.dat; cd /tmp/output; ${command} ${command === "discord" ? "send --file copy.dat" : "--output result.zip copy.dat"}; base64 result.zip`,
           timeout_ms: 10000 });
         const call = await receive();

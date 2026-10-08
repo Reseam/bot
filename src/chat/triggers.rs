@@ -5,7 +5,7 @@ use poise::serenity_prelude as serenity;
 use tokio::sync::OwnedMutexGuard;
 use tracing::{debug, error, info};
 
-use super::{NewRun, RunRequest, context, run, start_new};
+use super::{NewRun, RunRequest, context, guild_model, run, start_new};
 use crate::access::has_ai_access;
 use crate::{App, conversations};
 
@@ -49,7 +49,13 @@ pub async fn handle_message(
     if let Some(run) = conversation_id.and_then(|id| app.runs.get_conversation(id))
         && run.invoker.user.id == message.author.id
     {
-        let steering = context::steering_message(app, &message.content, &message.attachments).await;
+        let steering = context::steering_message(
+            app,
+            &message.content,
+            &message.attachments,
+            run.model.config.vision,
+        )
+        .await;
         if run.steer(steering) {
             app.runs.register_message(message.id, &run);
             message
@@ -121,18 +127,24 @@ async fn continue_conversation(
         .guild_id
         .context("continued conversation message has no guild")?;
     let conversation = conversations::load(&app.db, conversation_id).await?;
+    let model = guild_model(app, guild_id).await;
     let last_message_id = conversation
         .last_message_id
         .context("continued conversation has no mapped Discord messages")?;
-    let mut transcript = conversation.transcript;
+    let conversations::Conversation {
+        mut transcript,
+        prompt_prefix,
+        sandbox_image,
+        ..
+    } = conversation;
     transcript.push(
         context::continue_conversation(
             app,
             discord,
-            guild_id,
             message.channel_id,
             &member,
             last_message_id,
+            model.config.vision,
             context_input(message),
         )
         .await?,
@@ -147,7 +159,10 @@ async fn continue_conversation(
             channel_id: message.channel_id,
             reply_to: message.id,
             invoker: member,
+            model,
             transcript,
+            prompt_prefix,
+            sandbox_image,
         },
     )
     .await;

@@ -139,6 +139,7 @@ impl Renderer {
             FinalState::Outcome(Outcome::Finished) => self.commands_footer(),
             FinalState::Outcome(Outcome::Cancelled) => "-# Stopped".to_owned(),
             FinalState::Outcome(Outcome::TurnLimit) => "-# Reached the step limit".to_owned(),
+            FinalState::Outcome(Outcome::Refused) => "-# The model refused to continue".to_owned(),
             FinalState::Error(error) => format!("-# Error: {}", short_error(&error)),
         };
         if self.answer.trim().is_empty() && footer.is_empty() {

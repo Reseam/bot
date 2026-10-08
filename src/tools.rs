@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::chat::Run;
-use crate::llm::{FunctionSpec, ToolSpec, ToolType};
+use crate::llm::ToolSpec;
 
 mod bash;
 
@@ -101,12 +101,9 @@ impl ToolSet {
         self.tools
             .iter()
             .map(|tool| ToolSpec {
-                kind: ToolType::Function,
-                function: FunctionSpec {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    parameters: tool.parameters.clone(),
-                },
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.clone(),
             })
             .collect()
     }

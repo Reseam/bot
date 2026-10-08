@@ -50,7 +50,7 @@ async fn summarize(
         DEFAULT_MESSAGES
     });
 
-    let budget = context_budget(ctx);
+    let budget = context_budget(ctx, guild_id).await;
     let mut history = History::before(target.id, None);
     let mut collected = Vec::new();
     let mut size = 0;
@@ -99,7 +99,7 @@ async fn summarize_from_here(ctx: Context<'_>, message: serenity::Message) -> Re
     )
     .await?;
 
-    let budget = context_budget(ctx);
+    let budget = context_budget(ctx, guild_id).await;
     let first = format_message(ctx.serenity_context(), guild_id, &message);
     let mut size = first.chars().count();
     let mut collected = vec![first];
@@ -263,8 +263,9 @@ async fn launch(
     Ok(())
 }
 
-fn context_budget(ctx: Context<'_>) -> usize {
-    usize::try_from(ctx.data().config.llm.context_window).unwrap_or(usize::MAX)
+async fn context_budget(ctx: Context<'_>, guild_id: serenity::GuildId) -> usize {
+    let model = chat::guild_model(ctx.data(), guild_id).await;
+    usize::try_from(model.config.context_window).unwrap_or(usize::MAX)
 }
 
 async fn command_member(ctx: Context<'_>) -> Result<serenity::Member> {

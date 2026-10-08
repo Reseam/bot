@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use anyhow::{Context, Result, bail};
 use poise::serenity_prelude::{GuildId, RoleId, UserId};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
@@ -73,6 +73,18 @@ pub struct ForgeConfig {
 #[serde(deny_unknown_fields)]
 pub struct SandboxConfig {
     pub entry: PathBuf,
+    pub modal: Option<ModalConfig>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModalConfig {
+    pub token_id: String,
+    pub token_secret: String,
+    pub app: String,
+    pub image: String,
+    pub cpu: f64,
+    pub memory_mib: u32,
 }
 
 #[derive(Deserialize)]
@@ -90,12 +102,33 @@ pub struct AccessConfig {
     pub member_role_ids: Vec<RoleId>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LlmConfig {
+    pub default_model: String,
+    pub providers: BTreeMap<String, ProviderConfig>,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    OpenAi,
+    Anthropic,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConfig {
+    pub kind: ProviderKind,
     pub base_url: String,
     pub api_key: String,
-    pub model: String,
+    pub models: Vec<ModelConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelConfig {
+    pub id: String,
     pub context_window: u32,
     pub max_output_tokens: u32,
     #[serde(default = "default_vision")]
@@ -106,6 +139,35 @@ pub struct LlmConfig {
 
 const fn default_vision() -> bool {
     true
+}
+
+impl LlmConfig {
+    fn validate(&self) -> Result<()> {
+        for (name, provider) in &self.providers {
+            if name.is_empty() || name.contains('/') {
+                bail!("llm.providers.{name}: provider names must be non-empty and contain no '/'")
+            }
+            if provider.models.is_empty() {
+                bail!("llm.providers.{name}.models must list at least one model")
+            }
+            let mut ids = HashSet::new();
+            if let Some(model) = provider.models.iter().find(|model| !ids.insert(&model.id)) {
+                bail!("llm.providers.{name}.models lists {} twice", model.id)
+            }
+        }
+        let known = self
+            .default_model
+            .split_once('/')
+            .and_then(|(provider, id)| self.providers.get(provider).map(|provider| (provider, id)))
+            .is_some_and(|(provider, id)| provider.models.iter().any(|model| model.id == id));
+        if !known {
+            bail!(
+                "llm.default_model {} must be a configured provider/model",
+                self.default_model
+            )
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -152,6 +214,7 @@ impl Config {
             .with_context(|| format!("invalid configuration in {}", path.display()))?;
         config.data_dir = std::path::absolute(&config.data_dir)
             .context("failed to resolve data_dir to an absolute path")?;
+        config.llm.validate()?;
         if config.agent.history_messages > 100 {
             bail!("agent.history_messages must be between 0 and 100");
         }

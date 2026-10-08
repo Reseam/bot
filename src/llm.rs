@@ -1,18 +1,17 @@
-use std::iter::once;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use reqwest::{Client, Response, StatusCode};
-use serde::{Deserialize, Serialize, Serializer};
-use serde_json::{Map, Value};
+use reqwest::{Client, Request, Response, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, warn};
 
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, ModelConfig, ProviderKind};
 
-mod stream;
-
-use stream::parse_stream;
+pub(crate) mod anthropic;
+mod openai;
 
 const MAX_RETRIES: u32 = 3;
 const ERROR_BODY_LIMIT: usize = 2 * 1024;
@@ -23,9 +22,6 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
-    System {
-        content: String,
-    },
     User {
         content: UserContent,
     },
@@ -36,7 +32,7 @@ pub enum Message {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AssistantMessage {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -45,6 +41,9 @@ pub struct AssistantMessage {
     pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    // Thinking signatures bind to the exact prompt prefix: clear these when system, tools, or earlier messages change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anthropic_content: Vec<anthropic::ContentBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,18 +96,17 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSpec {
-    #[serde(rename = "type")]
-    pub kind: ToolType,
-    pub function: FunctionSpec,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FunctionSpec {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToolChoice {
+    Auto,
+    None,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -130,68 +128,118 @@ pub enum FinishReason {
     Stop,
     Length,
     ToolCalls,
+    Refusal,
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Usage {
-    #[serde(default)]
     pub prompt_tokens: u64,
-    #[serde(default)]
+    pub cached_tokens: u64,
     pub completion_tokens: u64,
-    #[serde(default)]
-    pub total_tokens: u64,
 }
 
 pub struct Llm {
+    models: Vec<Arc<Model>>,
+    default: Arc<Model>,
+}
+
+pub struct Model {
+    pub key: String,
+    pub config: ModelConfig,
+    provider: Arc<Provider>,
+}
+
+struct Provider {
+    kind: ProviderKind,
+    base_url: String,
+    api_key: String,
     http: Client,
-    config: LlmConfig,
 }
 
 impl Llm {
-    pub fn new(config: LlmConfig) -> Result<Self> {
-        Ok(Self {
-            http: Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .read_timeout(READ_TIMEOUT)
-                .build()
-                .context("failed to build LLM HTTP client")?,
-            config,
-        })
+    pub fn new(config: &LlmConfig) -> Result<Self> {
+        let http = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .build()
+            .context("failed to build LLM HTTP client")?;
+        let models = config
+            .providers
+            .iter()
+            .flat_map(|(name, provider)| {
+                let shared = Arc::new(Provider {
+                    kind: provider.kind,
+                    base_url: provider.base_url.trim_end_matches('/').to_owned(),
+                    api_key: provider.api_key.clone(),
+                    http: http.clone(),
+                });
+                provider.models.iter().map(move |model| {
+                    Arc::new(Model {
+                        key: format!("{name}/{}", model.id),
+                        config: model.clone(),
+                        provider: Arc::clone(&shared),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let default = models
+            .iter()
+            .find(|model| model.key == config.default_model)
+            .cloned()
+            .expect("configuration validation guarantees the default model exists");
+        Ok(Self { models, default })
     }
 
+    pub fn models(&self) -> &[Arc<Model>] {
+        &self.models
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Arc<Model>> {
+        self.models.iter().find(|model| model.key == key)
+    }
+
+    pub fn default_model(&self) -> &Arc<Model> {
+        &self.default
+    }
+}
+
+impl Model {
     pub async fn complete(
         &self,
         system: &str,
         messages: &[Message],
         tools: &[ToolSpec],
+        tool_choice: ToolChoice,
         cancel: &CancellationToken,
         mut on_delta: impl FnMut(Delta),
     ) -> Result<Completion> {
-        let system_message = Message::System {
-            content: system.to_owned(),
-        };
-        let body = RequestBody {
-            model: &self.config.model,
-            messages: RequestMessages {
-                system: &system_message,
-                messages,
-            },
-            stream: true,
-            stream_options: StreamOptions {
-                include_usage: true,
-            },
-            max_tokens: self.config.max_output_tokens,
+        let provider = &*self.provider;
+        let prompt = Prompt {
+            system,
+            messages,
             tools,
-            extra_body: &self.config.extra_body,
+            tool_choice,
         };
+        let request = match provider.kind {
+            ProviderKind::OpenAi => openai::request(provider, &self.config, &prompt),
+            ProviderKind::Anthropic => anthropic::request(provider, &self.config, &prompt),
+        }
+        .build()
+        .context("failed to build LLM request")?;
 
         let mut attempt = 0;
         loop {
-            let response = self.send_with_retries(&body, cancel).await?;
-            match parse_stream(response, cancel, &mut on_delta).await {
+            let response = provider.send_with_retries(&request, cancel).await?;
+            let parsed = match provider.kind {
+                ProviderKind::OpenAi => openai::parse_stream(response, cancel, &mut on_delta).await,
+                ProviderKind::Anthropic => {
+                    anthropic::parse_stream(response, cancel, &mut on_delta).await
+                }
+            };
+            match parsed {
                 Err(error) if !cancel.is_cancelled() && attempt < MAX_RETRIES => {
-                    warn!(error = %format!("{error:#}"), attempt, "LLM stream failed, retrying");
+                    warn!(error = %format!("{error:#}"), attempt, model = %self.key, "LLM stream failed, retrying");
                     on_delta(Delta::Restart);
                     let delay = Duration::from_secs(1 << attempt);
                     attempt += 1;
@@ -200,25 +248,55 @@ impl Llm {
                         () = tokio::time::sleep(delay) => {}
                     }
                 }
-                result => return result,
+                result => {
+                    if let Ok(Completion {
+                        usage: Some(usage), ..
+                    }) = &result
+                    {
+                        debug!(
+                            model = %self.key,
+                            prompt_tokens = usage.prompt_tokens,
+                            cached_tokens = usage.cached_tokens,
+                            completion_tokens = usage.completion_tokens,
+                            "LLM usage"
+                        );
+                    }
+                    return result;
+                }
             }
         }
     }
+}
 
+struct Prompt<'a> {
+    system: &'a str,
+    messages: &'a [Message],
+    tools: &'a [ToolSpec],
+    tool_choice: ToolChoice,
+}
+
+pub fn clear_replay(messages: &mut [Message]) {
+    for message in messages {
+        if let Message::Assistant(message) = message {
+            message.anthropic_content.clear();
+        }
+    }
+}
+
+impl Provider {
     async fn send_with_retries(
         &self,
-        body: &RequestBody<'_>,
+        request: &Request,
         cancel: &CancellationToken,
     ) -> Result<Response> {
-        let endpoint = format!(
-            "{}/chat/completions",
-            self.config.base_url.trim_end_matches('/')
-        );
         let mut attempt = 0;
         loop {
+            let request = request
+                .try_clone()
+                .expect("LLM requests have buffered JSON bodies");
             let sent = tokio::select! {
                 () = cancel.cancelled() => bail!("LLM request cancelled"),
-                result = self.http.post(&endpoint).bearer_auth(&self.config.api_key).json(body).send() => result,
+                result = self.http.execute(request) => result,
             };
             match sent {
                 Ok(response) if response.status().is_success() => return Ok(response),
@@ -250,42 +328,6 @@ impl Llm {
             }
         }
     }
-}
-
-#[derive(Serialize)]
-struct RequestBody<'a> {
-    model: &'a str,
-    messages: RequestMessages<'a>,
-    stream: bool,
-    stream_options: StreamOptions,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "tool_specs_empty")]
-    tools: &'a [ToolSpec],
-    #[serde(flatten)]
-    extra_body: &'a Map<String, Value>,
-}
-
-struct RequestMessages<'a> {
-    system: &'a Message,
-    messages: &'a [Message],
-}
-
-impl Serialize for RequestMessages<'_> {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.collect_seq(once(self.system).chain(self.messages))
-    }
-}
-
-#[derive(Serialize)]
-struct StreamOptions {
-    include_usage: bool,
-}
-
-fn tool_specs_empty(tools: &&[ToolSpec]) -> bool {
-    tools.is_empty()
 }
 
 fn retryable_status(status: StatusCode) -> bool {

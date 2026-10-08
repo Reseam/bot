@@ -57,7 +57,7 @@ jobs:
         run: |
           sandbox=root/usr/local/lib/reseam-bot/sandbox
           mkdir -p "$sandbox" root/usr/local/bin root/etc/reseam-bot dist
-          cp -r sandbox/dist sandbox/package.json sandbox/node_modules "$sandbox/"
+          cp -r sandbox/dist sandbox/container sandbox/package.json sandbox/node_modules "$sandbox/"
           cp target/release/reseam-bot root/usr/local/bin/
           cp config.toml root/etc/reseam-bot/
           tar --owner=0 --group=0 --numeric-owner -C root -czf dist/reseam-bot-linux-x64.tar.gz .

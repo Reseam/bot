@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::{
+use crate::llm::{
     AssistantMessage, Completion, Delta, FinishReason, FunctionCall, ToolCall, ToolType, Usage,
 };
 
@@ -16,8 +16,23 @@ use super::{
 struct StreamChunk {
     #[serde(default)]
     choices: Vec<Choice>,
-    usage: Option<Usage>,
+    usage: Option<StreamUsage>,
     error: Option<ApiError>,
+}
+
+#[derive(Deserialize)]
+struct StreamUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
+    prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Deserialize)]
+struct PromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +87,7 @@ struct Accumulator {
     last_tool_index: Option<usize>,
 }
 
-pub(super) async fn parse_stream(
+pub(in crate::llm) async fn parse_stream(
     response: Response,
     cancel: &CancellationToken,
     on_delta: &mut impl FnMut(Delta),
@@ -97,7 +112,7 @@ pub(super) async fn parse_stream(
         if let Some(error) = chunk.error {
             bail!("LLM stream error: {}", error.message);
         }
-        usage = chunk.usage.or(usage);
+        usage = chunk.usage.map(Usage::from).or(usage);
         for choice in chunk.choices {
             accumulator.push(choice.delta, on_delta);
             if let Some(reason) = choice.finish_reason {
@@ -190,6 +205,7 @@ impl Accumulator {
             tool_calls,
             reasoning_content: non_empty(self.reasoning_content),
             reasoning: non_empty(self.reasoning),
+            anthropic_content: Vec::new(),
         }
     }
 }
@@ -203,6 +219,19 @@ fn parse_finish_reason(reason: String) -> FinishReason {
         "stop" => FinishReason::Stop,
         "length" => FinishReason::Length,
         "tool_calls" => FinishReason::ToolCalls,
+        "content_filter" => FinishReason::Refusal,
         _ => FinishReason::Other(reason),
+    }
+}
+
+impl From<StreamUsage> for Usage {
+    fn from(usage: StreamUsage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            cached_tokens: usage
+                .prompt_tokens_details
+                .map_or(0, |details| details.cached_tokens),
+            completion_tokens: usage.completion_tokens,
+        }
     }
 }

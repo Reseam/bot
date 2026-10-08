@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use super::{Tool, ToolOutput};
 use crate::chat::Run;
+use crate::sandbox::SandboxKind;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 1_800;
@@ -41,6 +42,24 @@ Bridge commands (run `COMMAND --help` for details):
 
 Moderation and messages or polls in other channels ask the invoker for approval.";
 
+const MODAL_DESCRIPTION: &str = "Run a bash script as root in this conversation's Linux container. It is a real Debian machine with full network access, not the bot's machine, and it holds no credentials. Files and installed packages persist across calls and runs in the conversation and are deleted after 8 hours without use. Each run restores the container from the end of the previous run, so background processes do not survive between runs. Keep binary data in files: printed binary output is replaced with its byte count.
+
+Paths: /workspace is the working directory.
+
+Installed: git, curl, jq, zip, unzip, ripgrep, sqlite3, python3 with pip and uv, node with npm, build-essential, and Java 21.
+Android: jadx, apktool, baksmali, smali, apkid, bundletool, aapt2, apksigner, zipalign, d8, dexdump, apkeditor (merge split bundles: `apkeditor m -i in.apkm -o out.apk`), and dextools (fast dex search: search-string, search-strings, search-class, dump-class, dump-method, xref).
+Reseam: the latest `reseam` CLI and patches bundle, updated at the start of each run. The bundle is /opt/reseam/reseam-patches.reseam, its patch list is /opt/reseam/patches.json, and `--trust \"$(cat /opt/reseam/public-key)\"` trusts its signer.
+
+Bridge commands (run `COMMAND --help` for details):
+- discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord poll` posts a real Discord poll; `discord remind set|list|cancel` manages the invoker's reminders; `discord audit` reads the server audit log (filter with --user and --action); `discord mod` for moderation.
+- discord attachment MESSAGE_ID --url [--index N]: print a temporary download URL for an uploaded file such as an APK, then fetch it with curl. APKs come from Discord uploads or links the invoker gives; APK mirror sites block this container.
+- discord send --file PATH [--filename NAME] [TEXT]: upload a container file as an attachment to this Discord channel. Repeat --file for multiple files. Creating a file for the user includes sending it with this command.
+- mcp list, mcp SERVER TOOL --help, mcp SERVER TOOL key=value: call MCP services such as web search.
+- fetch [--method M] [--header 'K: V']... [--body FILE] URL: an HTTP request made by the bot. Use it for forge REST APIs; requests to configured forges are authenticated automatically. `--body -` reads stdin. Prints the response body and exits 22 on an HTTP error status.
+- view FILE: attach an image file to this result so you can see it.
+
+POST, PUT, PATCH, and DELETE requests through fetch, moderation, and messages or polls in other channels ask the invoker for approval. Never use curl or other container tools to change anything outside the container.";
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
@@ -49,10 +68,10 @@ struct Arguments {
 }
 
 pub fn tool(run: &Arc<Run>) -> Tool {
-    let description = if run.team {
-        TEAM_DESCRIPTION
-    } else {
-        MEMBER_DESCRIPTION
+    let description = match run.sandbox {
+        SandboxKind::Modal => MODAL_DESCRIPTION,
+        SandboxKind::JustBash if run.team => TEAM_DESCRIPTION,
+        SandboxKind::JustBash => MEMBER_DESCRIPTION,
     };
     Tool::new("bash", description, run.clone(), bash)
 }

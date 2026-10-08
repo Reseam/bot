@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use tokio_util::sync::CancellationToken;
 
 use super::CompactionSettings;
-use crate::llm::{ContentPart, Llm, Message, UserContent};
+use crate::llm::{ContentPart, Message, Model, ToolChoice, UserContent, clear_replay};
 
 pub(super) const SUMMARIZATION_SYSTEM_PROMPT: &str = "You are a context summarization assistant. Read a conversation between Discord users and an AI assistant and produce a structured summary in the exact format requested. Do not continue the conversation. Do not answer questions in it. Output only the summary.";
 const SUMMARY_FORMAT: &str = "## Goal\n## Constraints & Preferences\n## Progress\n### Done\n### In Progress\n### Blocked\n## Key Decisions\n## Next Steps\n## Critical Context";
@@ -21,7 +21,7 @@ pub(super) struct ContextUsage {
 }
 
 pub(super) async fn compact_if_needed(
-    llm: &Llm,
+    model: &Model,
     cancel: &CancellationToken,
     transcript: &mut Vec<Message>,
     usage: Option<&ContextUsage>,
@@ -56,13 +56,14 @@ pub(super) async fn compact_if_needed(
         ),
         None => format!("{serialized}\n\n{instructions}"),
     };
-    let completion = llm
+    let completion = model
         .complete(
             SUMMARIZATION_SYSTEM_PROMPT,
             &[Message::User {
                 content: UserContent::Text(prompt),
             }],
             &[],
+            ToolChoice::Auto,
             cancel,
             |_| {},
         )
@@ -79,6 +80,7 @@ pub(super) async fn compact_if_needed(
             content: UserContent::Text(format!("{SUMMARY_PREFIX}{summary}{SUMMARY_SUFFIX}")),
         }],
     );
+    clear_replay(transcript);
     Ok(true)
 }
 
@@ -116,7 +118,6 @@ fn estimate_messages(messages: &[Message]) -> u64 {
 
 fn estimate_message(message: &Message) -> u64 {
     let chars = match message {
-        Message::System { content } => char_count(content),
         Message::User { content } => match content {
             UserContent::Text(text) => char_count(text),
             UserContent::Parts(parts) => parts
@@ -167,7 +168,6 @@ fn serialize_messages(messages: &[Message]) -> String {
     messages
         .iter()
         .map(|message| match message {
-            Message::System { content } => format!("[System]: {content}"),
             Message::User { content } => format!("[User]: {}", serialize_user(content)),
             Message::Assistant(message) => {
                 let mut lines = message

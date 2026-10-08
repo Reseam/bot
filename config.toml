@@ -10,19 +10,51 @@ team_role_ids = ["${DISCORD_TEAM_ROLE_ID}"]
 member_role_ids = ["${DISCORD_AI_ROLE_ID}"]
 
 [llm]
+default_model = "openrouter/${LLM_MODEL}"
+
+[llm.providers.openrouter]
+kind = "openai"
 base_url = "${LLM_BASE_URL}"
 api_key = "${LLM_API_KEY}"
-model = "${LLM_MODEL}"
+
+[[llm.providers.openrouter.models]]
+id = "${LLM_MODEL}"
 context_window = 1048576
 max_output_tokens = 16000
 vision = true
 
-[llm.extra_body]
+[llm.providers.openrouter.models.extra_body]
 service_tier = "flex"
 
-[llm.extra_body.provider]
+[llm.providers.openrouter.models.extra_body.provider]
 only = ["openai/flex"]
 allow_fallbacks = false
+
+[llm.providers.anthropic]
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = "${ANTHROPIC_API_KEY}"
+
+[[llm.providers.anthropic.models]]
+id = "claude-opus-5-5"
+context_window = 1000000
+max_output_tokens = 64000
+
+[llm.providers.anthropic.models.extra_body.output_config]
+effort = "high"
+
+[[llm.providers.anthropic.models]]
+id = "claude-sonnet-5-5"
+context_window = 1000000
+max_output_tokens = 64000
+
+[llm.providers.anthropic.models.extra_body.output_config]
+effort = "medium"
+
+[[llm.providers.anthropic.models]]
+id = "claude-haiku-5-5"
+context_window = 1000000
+max_output_tokens = 64000
 
 [agent]
 max_turns = 100
@@ -40,6 +72,14 @@ token = "${GITHUB_TOKEN:-}"
 
 [sandbox]
 entry = "${SANDBOX_ENTRY:-sandbox/dist/main.js}"
+
+[sandbox.modal]
+token_id = "${MODAL_TOKEN_ID}"
+token_secret = "${MODAL_TOKEN_SECRET}"
+app = "reseam-bot"
+image = "reseam-android"
+cpu = 2.0
+memory_mib = 4096
 
 [mcp.exa]
 url = "https://mcp.exa.ai/mcp"

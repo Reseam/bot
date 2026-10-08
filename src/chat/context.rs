@@ -31,12 +31,13 @@ pub struct ContextInput {
 pub async fn build(
     app: &App,
     discord: &serenity::Context,
-    guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
     invoker: &serenity::Member,
     include_history: bool,
+    vision: bool,
     input: ContextInput,
 ) -> Result<Vec<Message>> {
+    let guild_id = invoker.guild_id;
     let history = if include_history {
         recent_history(app, discord, channel_id, input.before).await?
     } else {
@@ -58,19 +59,29 @@ pub async fn build(
         context_text.push_str(&format_message(discord, guild_id, referenced));
     }
     Ok(vec![
-        addressed_message(app, discord, guild_id, invoker, input, context_text).await,
+        addressed_message(
+            app,
+            discord,
+            channel_id,
+            invoker,
+            vision,
+            input,
+            context_text,
+        )
+        .await,
     ])
 }
 
 pub async fn continue_conversation(
     app: &App,
     discord: &serenity::Context,
-    guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
     invoker: &serenity::Member,
     last_message_id: serenity::MessageId,
+    vision: bool,
     input: ContextInput,
 ) -> Result<Message> {
+    let guild_id = invoker.guild_id;
     let new_messages = recent_history(app, discord, channel_id, input.before)
         .await?
         .iter()
@@ -83,7 +94,16 @@ pub async fn continue_conversation(
     } else {
         format!("NEW MESSAGES SINCE THE LAST REPLY:\n{new_messages}")
     };
-    Ok(addressed_message(app, discord, guild_id, invoker, input, context_text).await)
+    Ok(addressed_message(
+        app,
+        discord,
+        channel_id,
+        invoker,
+        vision,
+        input,
+        context_text,
+    )
+    .await)
 }
 
 async fn recent_history(
@@ -110,15 +130,20 @@ async fn recent_history(
 async fn addressed_message(
     app: &App,
     discord: &serenity::Context,
-    guild_id: serenity::GuildId,
+    channel_id: serenity::ChannelId,
     invoker: &serenity::Member,
+    vision: bool,
     input: ContextInput,
     mut context_text: String,
 ) -> Message {
     if !context_text.is_empty() {
         context_text.push_str("\n\n");
     }
-    context_text.push_str("MESSAGE ADDRESSED TO BOT:\n");
+    let channel = channel_name(discord, invoker.guild_id, channel_id)
+        .unwrap_or_else(|| "unknown-channel".to_owned());
+    context_text.push_str(&format!(
+        "MESSAGE ADDRESSED TO BOT in #{channel} ({channel_id}):\n"
+    ));
     context_text.push_str(&format_header(
         &input.timestamp,
         invoker.display_name(),
@@ -130,7 +155,7 @@ async fn addressed_message(
     context_text.push('\n');
     context_text.push_str(&replace_mentions(
         discord,
-        guild_id,
+        invoker.guild_id,
         &input.content,
         &input.mentions,
     ));
@@ -146,17 +171,21 @@ async fn addressed_message(
         .chain(referenced_attachments)
         .collect();
     let mut parts = vec![ContentPart::Text { text: context_text }];
-    parts.extend(attachment_parts(app, attachments).await);
+    parts.extend(attachment_parts(app, attachments, vision).await);
     Message::User {
         content: UserContent::from_parts(parts),
     }
 }
 
-async fn attachment_parts(app: &App, attachments: Vec<&serenity::Attachment>) -> Vec<ContentPart> {
+async fn attachment_parts(
+    app: &App,
+    attachments: Vec<&serenity::Attachment>,
+    vision: bool,
+) -> Vec<ContentPart> {
     let loaded = join_all(
         attachments
             .iter()
-            .map(|attachment| attachments::load(&app.http, attachment, app.config.llm.vision)),
+            .map(|attachment| attachments::load(&app.http, attachment, vision)),
     )
     .await;
     loaded
@@ -184,11 +213,12 @@ pub async fn steering_message(
     app: &App,
     content: &str,
     attachments: &[serenity::Attachment],
+    vision: bool,
 ) -> Message {
     let mut parts = vec![ContentPart::Text {
         text: content.to_owned(),
     }];
-    parts.extend(attachment_parts(app, attachments.iter().collect()).await);
+    parts.extend(attachment_parts(app, attachments.iter().collect(), vision).await);
     Message::User {
         content: UserContent::from_parts(parts),
     }

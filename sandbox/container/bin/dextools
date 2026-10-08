@@ -1,0 +1,2 @@
+#!/bin/sh
+exec java -cp "/opt/smali/lib/*" "$(dirname "$(readlink -f "$0")")/../DexTools.java" "$@"

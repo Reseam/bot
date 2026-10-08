@@ -5,7 +5,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::{
-    Completion, ContentPart, Delta, FinishReason, ImageUrl, Llm, Message, ToolCall, UserContent,
+    Completion, ContentPart, Delta, FinishReason, ImageUrl, Message, Model, ToolCall, ToolChoice,
+    UserContent,
 };
 use crate::text::truncate_output;
 use crate::tools::{ImageData, ToolOutput, ToolSet};
@@ -38,10 +39,11 @@ pub enum Outcome {
     Finished,
     Cancelled,
     TurnLimit,
+    Refused,
 }
 
 pub struct Agent<'a> {
-    pub llm: &'a Llm,
+    pub model: &'a Model,
     pub tools: &'a ToolSet,
     pub system: &'a str,
     pub max_turns: u32,
@@ -65,7 +67,7 @@ impl Agent<'_> {
             }
 
             let compacted = compact_if_needed(
-                self.llm,
+                self.model,
                 cancel,
                 transcript,
                 latest_usage.as_ref(),
@@ -86,17 +88,28 @@ impl Agent<'_> {
                 });
             }
             let _ = events.send(AgentEvent::TurnStarted);
-            let tools = if last_turn { &[][..] } else { &specs };
+            let tool_choice = if last_turn {
+                ToolChoice::None
+            } else {
+                ToolChoice::Auto
+            };
             let completion = self
-                .llm
-                .complete(self.system, transcript, tools, cancel, |delta| {
-                    let event = match delta {
-                        Delta::Text(text) => AgentEvent::Text(text),
-                        Delta::Restart => AgentEvent::TurnRestarted,
-                        Delta::Reasoning(_) => return,
-                    };
-                    let _ = events.send(event);
-                })
+                .model
+                .complete(
+                    self.system,
+                    transcript,
+                    &specs,
+                    tool_choice,
+                    cancel,
+                    |delta| {
+                        let event = match delta {
+                            Delta::Text(text) => AgentEvent::Text(text),
+                            Delta::Restart => AgentEvent::TurnRestarted,
+                            Delta::Reasoning(_) => return,
+                        };
+                        let _ = events.send(event);
+                    },
+                )
                 .await;
             let Completion {
                 message,
@@ -114,6 +127,16 @@ impl Agent<'_> {
                 transcript_len: transcript.len(),
             });
 
+            if finish_reason == FinishReason::Refusal {
+                append_results(
+                    transcript,
+                    error_results(
+                        &tool_calls,
+                        "not run: the model provider refused the response",
+                    ),
+                );
+                return Ok(Outcome::Refused);
+            }
             if last_turn {
                 append_results(
                     transcript,

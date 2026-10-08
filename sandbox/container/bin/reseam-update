@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+api=https://git.reseam.app/api/v1/repos/reseam
+releases=https://git.reseam.app/reseam
+dir=/opt/reseam
+mkdir -p "$dir"
+latest() { curl -fsS --retry 3 "$api/$1/releases/latest" | jq -er .tag_name; }
+
+cli=$(latest reseam)
+if [ "$(cat "$dir/cli-version" 2>/dev/null)" != "$cli" ]; then
+  curl -fsSL --retry 3 -o "$dir/reseam.part" "$releases/reseam/releases/download/$cli/reseam-linux-x64"
+  chmod +x "$dir/reseam.part"
+  mv "$dir/reseam.part" /usr/local/bin/reseam
+  echo "$cli" > "$dir/cli-version"
+fi
+
+patches=$(latest patches)
+if [ "$(cat "$dir/patches-version" 2>/dev/null)" != "$patches" ]; then
+  curl -fsSL --retry 3 -o "$dir/patches.json.part" "$releases/patches/releases/download/$patches/patches.json"
+  curl -fsSL --retry 3 -o "$dir/reseam-patches.part" "$releases/patches/releases/download/$patches/reseam-patches.reseam"
+  jq -er .bundle.public_key "$dir/patches.json.part" > "$dir/public-key"
+  mv "$dir/patches.json.part" "$dir/patches.json"
+  mv "$dir/reseam-patches.part" "$dir/reseam-patches.reseam"
+  echo "$patches" > "$dir/patches-version"
+fi

@@ -1,14 +1,51 @@
 export type BridgeCommand = "discord" | "repo" | "mcp" | "archive";
 
-export interface ExecRequest {
-  type: "exec";
-  id: number;
-  sandbox: number;
+export interface ModalSettings {
+  token_id: string;
+  token_secret: string;
+  app: string;
+  image: string;
+  cpu: number;
+  memory_mib: number;
+}
+
+export interface ConfigureRequest {
+  type: "configure";
+  modal: ModalSettings | null;
+}
+
+export interface JustBashBackend {
+  kind: "just-bash";
   workspace: string;
   repos: string;
   team: boolean;
+}
+
+export interface ModalBackend {
+  kind: "modal";
+  image: string | null;
+}
+
+export interface ExecRequest<Backend = JustBashBackend | ModalBackend> {
+  type: "exec";
+  id: number;
+  sandbox: number;
   command: string;
   timeout_ms: number;
+  backend: Backend;
+}
+
+export interface SaveRequest {
+  type: "save";
+  id: number;
+  sandbox: number;
+  previous: string | null;
+}
+
+export interface Saved {
+  type: "saved";
+  id: number;
+  result: { image: string } | "unchanged" | { error: string };
 }
 
 export interface CancelRequest {
@@ -90,7 +127,7 @@ export interface FileResult {
   result: { base64: string } | { error: string } | { entries: ArchiveEntry[] } | "written";
 }
 
-export type Incoming = ExecRequest | CancelRequest | CloseRequest | Reply | FileRequest;
+export type Incoming = ConfigureRequest | ExecRequest | SaveRequest | CancelRequest | CloseRequest | Reply | FileRequest;
 
 export interface ExecResult {
   type: "exec_result";
@@ -125,4 +162,4 @@ export interface FetchRequest {
   body_base64: string | null;
 }
 
-export type Outgoing = ExecResult | CallRequest | FetchRequest | FileResult;
+export type Outgoing = ExecResult | Saved | CallRequest | FetchRequest | FileResult;

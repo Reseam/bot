@@ -3,6 +3,7 @@ use poise::serenity_prelude as serenity;
 use sqlx::SqlitePool;
 
 use crate::db::{discord_id, stored_discord_id};
+use crate::sandbox::SandboxKind;
 
 pub async fn mod_log_channel(
     db: &SqlitePool,
@@ -62,5 +63,57 @@ pub async fn set_personality(
     .execute(db)
     .await
     .context("failed to save personality")?;
+    Ok(())
+}
+
+pub async fn model(db: &SqlitePool, guild_id: serenity::GuildId) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT model FROM guild_settings WHERE guild_id = ?",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .fetch_optional(db)
+    .await
+    .context("failed to read model")?
+    .flatten())
+}
+
+pub async fn set_model(db: &SqlitePool, guild_id: serenity::GuildId, model: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO guild_settings (guild_id, model) VALUES (?, ?) \
+         ON CONFLICT(guild_id) DO UPDATE SET model = excluded.model",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .bind(model)
+    .execute(db)
+    .await
+    .context("failed to save model")?;
+    Ok(())
+}
+
+pub async fn sandbox(db: &SqlitePool, guild_id: serenity::GuildId) -> Result<Option<SandboxKind>> {
+    Ok(sqlx::query_scalar::<_, Option<SandboxKind>>(
+        "SELECT sandbox FROM guild_settings WHERE guild_id = ?",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .fetch_optional(db)
+    .await
+    .context("failed to read sandbox setting")?
+    .flatten())
+}
+
+pub async fn set_sandbox(
+    db: &SqlitePool,
+    guild_id: serenity::GuildId,
+    sandbox: SandboxKind,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO guild_settings (guild_id, sandbox) VALUES (?, ?) \
+         ON CONFLICT(guild_id) DO UPDATE SET sandbox = excluded.sandbox",
+    )
+    .bind(discord_id(guild_id.get())?)
+    .bind(sandbox)
+    .execute(db)
+    .await
+    .context("failed to save sandbox setting")?;
     Ok(())
 }

@@ -7,7 +7,8 @@ use tokio_util::sync::CancellationToken;
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::method};
 
 use super::*;
-use crate::test_support::{llm_config, sse, user};
+use crate::config::ProviderKind;
+use crate::test_support::{sse, test_model, user};
 
 fn stream_response(events: &[Value]) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(sse(events), "text/event-stream")
@@ -20,18 +21,19 @@ async fn streams_text_and_usage() -> Result<()> {
         .respond_with(stream_response(&[
             json!({"choices":[{"delta":{"content":"hello "},"finish_reason":null}]}),
             json!({"choices":[{"delta":{"content":"world"},"finish_reason":"stop"}]}),
-            json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
+            json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":1}}}),
         ]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
     let mut deltas = Vec::new();
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("hi")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |delta| deltas.push(delta),
         )
@@ -39,8 +41,12 @@ async fn streams_text_and_usage() -> Result<()> {
 
     assert_eq!(completion.finish_reason, FinishReason::Stop);
     assert_eq!(
-        completion.usage.as_ref().map(|usage| usage.total_tokens),
-        Some(5)
+        completion.usage,
+        Some(Usage {
+            prompt_tokens: 3,
+            cached_tokens: 1,
+            completion_tokens: 2,
+        })
     );
     assert_eq!(
         deltas,
@@ -63,13 +69,14 @@ async fn assembles_fragmented_tool_call() -> Result<()> {
         ]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("time")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -98,13 +105,14 @@ async fn captures_tool_extra_content() -> Result<()> {
         })]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("lookup")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -128,13 +136,14 @@ async fn tool_deltas_without_indexes_start_or_append_calls() -> Result<()> {
         ]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("run")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -160,13 +169,14 @@ async fn assigns_an_id_to_tool_calls_without_one() -> Result<()> {
         })]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("lookup")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -186,13 +196,14 @@ async fn echoes_reasoning_in_the_field_received() -> Result<()> {
         ]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("question")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -216,13 +227,14 @@ async fn accepts_missing_delta_and_partial_usage() -> Result<()> {
         ]))
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("hi")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |_| {},
         )
@@ -232,8 +244,8 @@ async fn accepts_missing_delta_and_partial_usage() -> Result<()> {
         completion.usage,
         Some(Usage {
             prompt_tokens: 4,
+            cached_tokens: 0,
             completion_tokens: 0,
-            total_tokens: 0,
         })
     );
     Ok(())
@@ -268,14 +280,15 @@ async fn complete_after_failure(
         })
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
     let mut deltas = Vec::new();
 
-    let completion = llm
+    let completion = model
         .complete(
             "system",
             &[user("hi")],
             &[],
+            ToolChoice::Auto,
             &CancellationToken::new(),
             |delta| deltas.push(delta),
         )
@@ -314,6 +327,63 @@ async fn retries_a_stream_that_fails_midway_and_voids_its_output() -> Result<()>
         ]
     );
     assert_eq!(completion.message.content.as_deref(), Some("recovered"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_keeps_stored_replay_out_and_sends_tool_choice() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(stream_response(&[json!({
+            "choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]
+        })]))
+        .mount(&server)
+        .await;
+    let model = test_model(ProviderKind::OpenAi, server.uri());
+    let transcript = vec![
+        user("hi"),
+        Message::Assistant(AssistantMessage {
+            content: Some("hello".to_owned()),
+            anthropic_content: vec![anthropic::ContentBlock::Thinking {
+                thinking: String::new(),
+                signature: "signed".to_owned(),
+            }],
+            ..AssistantMessage::default()
+        }),
+        user("again"),
+    ];
+    let tool = ToolSpec {
+        name: "bash".to_owned(),
+        description: "Run a command".to_owned(),
+        parameters: json!({"type":"object"}),
+    };
+
+    model
+        .complete(
+            "system",
+            &transcript,
+            std::slice::from_ref(&tool),
+            ToolChoice::None,
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let body: Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(
+        body["messages"][0],
+        json!({"role":"system","content":"system"})
+    );
+    assert_eq!(
+        body["messages"][2],
+        json!({"role":"assistant","content":"hello"})
+    );
+    assert_eq!(
+        body["tools"],
+        json!([{"type":"function","function":{"name":"bash","description":"Run a command","parameters":{"type":"object"}}}])
+    );
+    assert_eq!(body["tool_choice"], json!("none"));
     Ok(())
 }
 

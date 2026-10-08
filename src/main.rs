@@ -68,14 +68,14 @@ async fn main() -> Result<()> {
     conversations::spawn_pruning(db.clone(), config.agent.conversation_retention_days);
     let token = config.discord.token.clone();
     let guild_id = config.discord.guild_id;
-    let llm = Llm::new(config.llm.clone())?;
+    let llm = Llm::new(&config.llm)?;
     let mcp = mcp::Mcp::connect(&config.mcp).await;
     let forges = config
         .forges
         .iter()
         .map(|(name, config)| forge::Forge::new(name, config))
         .collect::<Result<Vec<_>>>()?;
-    let sandbox = Sandbox::new(config.sandbox.entry.clone())?;
+    let sandbox = Sandbox::new(&config.sandbox)?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(120))

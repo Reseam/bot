@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "just-bash": "3.4.2"
+    "just-bash": "3.4.2",
+    "modal": "0.10.1"
   },
   "devDependencies": {
     "@types/node": "^24",

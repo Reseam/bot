@@ -29,6 +29,8 @@ Mention the bot or reply to it to start a run, and reply to its answer to contin
 | `/mcp status` | team | MCP server status and tools |
 | `/mcp reconnect server` | owners | Reconnect an MCP server |
 | `/personality` | owners | Write or clear extra instructions for the bot's tone and style |
+| `/model [model]` | owners | Show the AI model, or switch it for new runs. Models are named `provider/model-id` |
+| `/sandbox [kind]` | team | Show or switch where team runs execute commands: `just-bash` or `modal` |
 | `/warn`, `/timeout`, `/untimeout` | Moderate Members | |
 | `/kick` | Kick Members | |
 | `/ban`, `/unban` | Ban Members | `/ban` works on users who already left and takes an optional duration |
@@ -38,7 +40,7 @@ Mention the bot or reply to it to start a run, and reply to its answer to contin
 
 ## Sandbox
 
-The agent has one tool, `bash`. It runs in [just-bash](https://github.com/vercel-labs/just-bash), an emulated shell with its own filesystem, inside a Node service the bot starts (`sandbox/`). The shell can't see the bot's files, environment, or network.
+The agent has one tool, `bash`. It runs in [just-bash](https://github.com/vercel-labs/just-bash), an emulated shell with its own filesystem, inside a Node service the bot starts (`sandbox/`). The shell can't see the bot's files, environment, or network. Team runs can use a real container instead, described below.
 
 - `/workspace` belongs to the conversation. `/repos/<host>/<owner>/<name>` shows cloned repositories; edits there stay in memory. Both are deleted after 8 hours without use.
 - Built in: coreutils, `rg`, `jq`, `yq`, `sqlite3`, `python3` (standard library), `js-exec`, and `curl`. `curl` reaches public hosts only; the bot adds forge tokens for configured forge APIs.
@@ -52,6 +54,14 @@ The agent has one tool, `bash`. It runs in [just-bash](https://github.com/vercel
 
 Run any bridge command with `--help` for its flags and limits.
 
+### Real sandbox
+
+`/sandbox modal` switches team runs to a real Linux container on [Modal](https://modal.com). Members always get just-bash. The container has full network access and no credentials, and runs the image in `sandbox/image/Dockerfile`: Java 21, Python with uv, Node, git, and the Android tools jadx, apktool, smali, baksmali, dextools, apkeditor, bundletool, apkid, and build-tools 36. At the start of each run it installs the latest `reseam` CLI and patches bundle under `/opt/reseam`.
+
+- The `discord`, `mcp`, `view`, and `fetch` bridge commands work through a relay in the container. `fetch` replaces curl for forge APIs: it adds forge tokens and asks for approval on writes. Plain curl and git in the container are unauthenticated.
+- APKs come from Discord uploads (`discord attachment MESSAGE --url` prints a download link) or links. APK mirrors block Modal's addresses.
+- A conversation's container starts on its first command, is snapshotted and stopped when the run ends, and is restored on the next run. Snapshots expire 8 hours after the run that made them.
+
 ## Configuration
 
 `config.toml` is committed and only references environment variables with `${NAME}` or `${NAME:-default}`. A missing variable without a default stops startup with an error naming it. Copy `.env.example` to `.env` for local runs.
@@ -62,15 +72,18 @@ Run any bridge command with `--help` for its flags and limits.
 | `DISCORD_GUILD_ID` | Server the slash commands register to |
 | `DISCORD_OWNER_ID`, `DISCORD_TEAM_ROLE_ID`, `DISCORD_AI_ROLE_ID` | Who can use the AI |
 | `DATA_DIR` | SQLite database, sandbox workspaces, cloned repositories |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Any OpenAI-compatible Chat Completions endpoint |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Any OpenAI-compatible Chat Completions endpoint, the `openrouter` provider |
+| `ANTHROPIC_API_KEY` | Claude API key from the Claude Console, the `anthropic` provider |
+| `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | Modal token for the real sandbox |
 | `FORGEJO_URL`, `FORGEJO_TOKEN`, `GITHUB_TOKEN` | Forge access; without a token, only public data works |
 | `EXA_API_KEY` | Exa MCP server |
 | `SANDBOX_ENTRY` | Path to the built sandbox service (default `sandbox/dist/main.js`) |
 
 Notable settings in `config.toml`:
 
-- `[llm]` `context_window` and `max_output_tokens` must match the model. Set `vision = false` for models without image input. `extra_body` is merged into every request, e.g. `extra_body = { reasoning = { effort = "medium" } }`.
+- `[llm]` `default_model` is the `provider/model-id` used until `/model` picks another. Each `[llm.providers.<name>]` has a `kind` (`openai` for Chat Completions endpoints, `anthropic` for the Claude Messages API), `base_url`, `api_key`, and a `models` list. Each model's `context_window` and `max_output_tokens` must match the model. Set `vision = false` for models without image input. A model's `extra_body` is merged into every request, e.g. `extra_body = { reasoning = { effort = "medium" } }`, or `extra_body.output_config = { effort = "high" }` for Claude. Claude requests cache the system prompt and the conversation for an hour, so replies within that hour reread the conversation from cache.
 - `[agent]` `max_turns` (default 100; the last step has no tools and must answer), `history_messages` (0 to 100, default 0), `conversation_retention_days` (default 30), `compact_at_tokens` (default 500000), `compaction_reserve_tokens`, `keep_recent_tokens`.
+- `[sandbox.modal]` (optional) enables the real sandbox: `token_id`, `token_secret`, the Modal `app`, the published `image` name, and the `cpu` cores and `memory_mib` each container reserves. Build and publish the image once, and again after changing `sandbox/image/Dockerfile`: `npm --prefix sandbox run build && node --env-file=.env sandbox/dist/image.js reseam-bot reseam-android`.
 - `[forges.<name>]` `kind` (`github` or `forgejo`), `url`, `token`, optional `default_repo`.
 - `[mcp.<name>]` either `url` (streamable HTTP, optional `headers`) or `command` with `args` and `env` (stdio). Optional `tools` allowlist, `approve` list, and `timeout_secs`.
 
@@ -88,7 +101,7 @@ npm --prefix sandbox ci && npm --prefix sandbox run build
 cargo run
 ```
 
-`cargo test` runs the unit and mock-server tests. `cargo test -- --ignored` also runs live tests against the configured LLM and Exa.
+`cargo test` runs the unit and mock-server tests, and `npm --prefix sandbox test` runs the sandbox service tests after a build. `cargo test -- --ignored` also runs live tests against the configured LLM, the Anthropic API (`ANTHROPIC_MODEL` overrides the default `claude-opus-5-5`), and Exa.
 
 ## Deploy
 

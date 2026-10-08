@@ -11,12 +11,16 @@ use crate::llm::{ContentPart, Message, UserContent};
 pub struct Conversation {
     pub transcript: Vec<Message>,
     pub last_message_id: Option<serenity::MessageId>,
+    pub prompt_prefix: Option<String>,
+    pub sandbox_image: Option<String>,
 }
 
 #[derive(FromRow)]
 struct ConversationRow {
     transcript: String,
     last_message_id: Option<i64>,
+    prompt_prefix: Option<String>,
+    sandbox_image: Option<String>,
 }
 
 pub async fn create(
@@ -55,7 +59,7 @@ pub async fn find_by_message(
 
 pub async fn load(db: &SqlitePool, id: i64) -> Result<Conversation> {
     let row = sqlx::query_as::<_, ConversationRow>(
-        "SELECT transcript, \
+        "SELECT transcript, prompt_prefix, sandbox_image, \
          (SELECT MAX(message_id) FROM conversation_messages WHERE conversation_id = c.id) \
          AS last_message_id \
          FROM conversations c WHERE id = ?",
@@ -71,6 +75,8 @@ pub async fn load(db: &SqlitePool, id: i64) -> Result<Conversation> {
             .last_message_id
             .map(|id| stored_discord_id(id).map(serenity::MessageId::new))
             .transpose()?,
+        prompt_prefix: row.prompt_prefix,
+        sandbox_image: row.sandbox_image,
     })
 }
 
@@ -78,6 +84,7 @@ pub async fn save(
     db: &SqlitePool,
     id: i64,
     transcript: &[Message],
+    prompt_prefix: &str,
     message_ids: &[serenity::MessageId],
 ) -> Result<()> {
     let transcript = serde_json::to_string(&strip_images(transcript))
@@ -86,13 +93,16 @@ pub async fn save(
         .begin()
         .await
         .context("failed to begin conversation transaction")?;
-    sqlx::query("UPDATE conversations SET transcript = ?, updated_at = ? WHERE id = ?")
-        .bind(&transcript)
-        .bind(serenity::Timestamp::now().unix_timestamp())
-        .bind(id)
-        .execute(&mut *transaction)
-        .await
-        .context("failed to update conversation")?;
+    sqlx::query(
+        "UPDATE conversations SET transcript = ?, prompt_prefix = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&transcript)
+    .bind(prompt_prefix)
+    .bind(serenity::Timestamp::now().unix_timestamp())
+    .bind(id)
+    .execute(&mut *transaction)
+    .await
+    .context("failed to update conversation")?;
     for message_id in message_ids {
         sqlx::query(
             "INSERT OR IGNORE INTO conversation_messages (message_id, conversation_id) \
@@ -108,6 +118,16 @@ pub async fn save(
         .commit()
         .await
         .context("failed to commit conversation transaction")
+}
+
+pub async fn set_sandbox_image(db: &SqlitePool, id: i64, image: &str) -> Result<()> {
+    sqlx::query("UPDATE conversations SET sandbox_image = ? WHERE id = ?")
+        .bind(image)
+        .bind(id)
+        .execute(db)
+        .await
+        .context("failed to save sandbox image")?;
+    Ok(())
 }
 
 pub fn spawn_pruning(db: SqlitePool, retention_days: u32) {
@@ -130,26 +150,41 @@ pub fn spawn_pruning(db: SqlitePool, retention_days: u32) {
 }
 
 fn strip_images(transcript: &[Message]) -> Vec<Message> {
+    let mut stripped = false;
     transcript
         .iter()
         .cloned()
         .map(|message| match message {
             Message::User {
                 content: UserContent::Parts(parts),
-            } => Message::User {
-                content: UserContent::from_parts(
-                    parts
-                        .into_iter()
-                        .map(|part| match part {
-                            ContentPart::ImageUrl { .. } => ContentPart::Text {
-                                text: "[image omitted from saved history]".to_owned(),
-                            },
-                            part => part,
-                        })
-                        .collect(),
-                ),
-            },
+            } if parts
+                .iter()
+                .any(|part| matches!(part, ContentPart::ImageUrl { .. })) =>
+            {
+                stripped = true;
+                Message::User {
+                    content: UserContent::from_parts(
+                        parts
+                            .into_iter()
+                            .map(|part| match part {
+                                ContentPart::ImageUrl { .. } => ContentPart::Text {
+                                    text: "[image omitted from saved history]".to_owned(),
+                                },
+                                part => part,
+                            })
+                            .collect(),
+                    ),
+                }
+            }
+            // Replay blocks after a stripped image were bound to its bytes.
+            Message::Assistant(mut message) if stripped => {
+                message.anthropic_content.clear();
+                Message::Assistant(message)
+            }
             message => message,
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

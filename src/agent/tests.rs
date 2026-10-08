@@ -10,7 +10,8 @@ use tokio_util::sync::CancellationToken;
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::method};
 
 use super::*;
-use crate::test_support::{llm_config, sse, user};
+use crate::config::ProviderKind;
+use crate::test_support::{anthropic_sse, sse, test_model, user};
 use crate::tools::Tool;
 
 #[derive(Clone)]
@@ -52,7 +53,7 @@ fn tool_call(index: usize, id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
-async fn llm_with_responses(responses: Vec<String>) -> Result<(MockServer, Llm)> {
+async fn serve(kind: ProviderKind, responses: Vec<String>) -> (MockServer, Arc<Model>) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(SequenceResponder {
@@ -61,8 +62,12 @@ async fn llm_with_responses(responses: Vec<String>) -> Result<(MockServer, Llm)>
         })
         .mount(&server)
         .await;
-    let llm = Llm::new(llm_config(server.uri()))?;
-    Ok((server, llm))
+    let model = test_model(kind, server.uri());
+    (server, model)
+}
+
+async fn openai_with_responses(responses: Vec<String>) -> Result<(MockServer, Arc<Model>)> {
+    Ok(serve(ProviderKind::OpenAi, responses).await)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -90,7 +95,7 @@ fn echo_tool() -> Tool {
 }
 
 async fn run_agent(
-    llm: &Llm,
+    model: &Model,
     tools: &ToolSet,
     max_turns: u32,
     transcript: &mut Vec<Message>,
@@ -98,7 +103,7 @@ async fn run_agent(
 ) -> Result<Outcome> {
     let (events, _event_receiver) = mpsc::unbounded_channel();
     Agent {
-        llm,
+        model,
         tools,
         system: "system",
         max_turns,
@@ -116,7 +121,7 @@ async fn run_agent(
 
 #[tokio::test]
 async fn tool_call_then_final_text_has_ordered_transcript() -> Result<()> {
-    let (_server, llm) = llm_with_responses(vec![
+    let (_server, model) = openai_with_responses(vec![
         tool_turn(
             json!([tool_call(0, "one", "echo", r#"{"text":"result"}"#)]),
             "tool_calls",
@@ -128,7 +133,7 @@ async fn tool_call_then_final_text_has_ordered_transcript() -> Result<()> {
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
 
-    let outcome = run_agent(&llm, &tools, 4, &mut transcript, &mut steering).await?;
+    let outcome = run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
 
     assert_eq!(outcome, Outcome::Finished);
     assert!(matches!(transcript[1], Message::Assistant(_)));
@@ -147,8 +152,8 @@ async fn parallel_tools_finish_without_deadlock_and_keep_source_order() -> Resul
         tool_call(0, "first", "wait", r#"{"text":"a"}"#),
         tool_call(1, "second", "wait", r#"{"text":"b"}"#)
     ]);
-    let (_server, llm) =
-        llm_with_responses(vec![tool_turn(calls, "tool_calls"), assistant_text("done")]).await?;
+    let (_server, model) =
+        openai_with_responses(vec![tool_turn(calls, "tool_calls"), assistant_text("done")]).await?;
     let barrier = Arc::new(Barrier::new(2));
     let tool = Tool::new(
         "wait",
@@ -168,7 +173,7 @@ async fn parallel_tools_finish_without_deadlock_and_keep_source_order() -> Resul
 
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        run_agent(&llm, &tools, 4, &mut transcript, &mut steering),
+        run_agent(&model, &tools, 4, &mut transcript, &mut steering),
     )
     .await??;
 
@@ -189,7 +194,7 @@ async fn unknown_tool_and_bad_arguments_are_recoverable_results() -> Result<()> 
         tool_call(1, "bad-json", "echo", "not json"),
         tool_call(2, "bad-shape", "echo", "{}")
     ]);
-    let (_server, llm) = llm_with_responses(vec![
+    let (_server, model) = openai_with_responses(vec![
         tool_turn(calls, "tool_calls"),
         assistant_text("fixed"),
     ])
@@ -198,7 +203,7 @@ async fn unknown_tool_and_bad_arguments_are_recoverable_results() -> Result<()> 
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
 
-    run_agent(&llm, &tools, 4, &mut transcript, &mut steering).await?;
+    run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
 
     assert!(
         matches!(&transcript[2], Message::Tool { content, .. } if content.contains("Error: unknown tool"))
@@ -214,7 +219,7 @@ async fn unknown_tool_and_bad_arguments_are_recoverable_results() -> Result<()> 
 
 #[tokio::test]
 async fn last_step_answers_without_tools() -> Result<()> {
-    let (server, llm) = llm_with_responses(vec![
+    let (server, model) = openai_with_responses(vec![
         tool_turn(
             json!([tool_call(0, "one", "echo", r#"{"text":"found"}"#)]),
             "tool_calls",
@@ -226,7 +231,7 @@ async fn last_step_answers_without_tools() -> Result<()> {
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
 
-    let outcome = run_agent(&llm, &tools, 2, &mut transcript, &mut steering).await?;
+    let outcome = run_agent(&model, &tools, 2, &mut transcript, &mut steering).await?;
 
     assert_eq!(outcome, Outcome::TurnLimit);
     assert!(
@@ -236,14 +241,16 @@ async fn last_step_answers_without_tools() -> Result<()> {
         matches!(&transcript[4], Message::Assistant(message) if message.content.as_deref() == Some("partial answer"))
     );
     let requests = server.received_requests().await.unwrap_or_default();
+    let first: Value = serde_json::from_slice(&requests[0].body)?;
     let last: Value = serde_json::from_slice(&requests[1].body)?;
-    assert!(last.get("tools").is_none());
+    assert_eq!(last["tools"], first["tools"]);
+    assert_eq!(last["tool_choice"], json!("none"));
     Ok(())
 }
 
 #[tokio::test]
 async fn length_finish_does_not_execute_tools() -> Result<()> {
-    let (_server, llm) = llm_with_responses(vec![
+    let (_server, model) = openai_with_responses(vec![
         tool_turn(json!([tool_call(0, "cut", "count", "{")]), "length"),
         assistant_text("retried"),
     ])
@@ -260,7 +267,7 @@ async fn length_finish_does_not_execute_tools() -> Result<()> {
     let mut transcript = vec![user("start")];
     let (_steer, mut steering) = mpsc::unbounded_channel();
 
-    run_agent(&llm, &tools, 4, &mut transcript, &mut steering).await?;
+    run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
 
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(
@@ -275,7 +282,7 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
         tool_call(0, "first", "wait", "{}"),
         tool_call(1, "second", "wait", "{}")
     ]);
-    let (_server, llm) = llm_with_responses(vec![tool_turn(calls, "tool_calls")]).await?;
+    let (_server, model) = openai_with_responses(vec![tool_turn(calls, "tool_calls")]).await?;
     let tool = Tool::new("wait", "Wait", (), |_state, _arguments: NoArgs| {
         std::future::pending()
     });
@@ -285,7 +292,7 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
     let (events, mut event_receiver) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
     let agent = Agent {
-        llm: &llm,
+        model: &model,
         tools: &tools,
         system: "system",
         max_turns: 2,
@@ -329,7 +336,7 @@ async fn cancellation_adds_results_for_every_running_tool() -> Result<()> {
 
 #[tokio::test]
 async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
-    let (_server, llm) = llm_with_responses(vec![
+    let (_server, model) = openai_with_responses(vec![
         tool_turn(json!([tool_call(0, "steer", "queue", "{}")]), "tool_calls"),
         assistant_text("steered"),
     ])
@@ -350,12 +357,91 @@ async fn steering_is_inserted_before_the_next_turn() -> Result<()> {
     let tools = ToolSet::new(vec![tool]);
     let mut transcript = vec![user("start")];
 
-    run_agent(&llm, &tools, 4, &mut transcript, &mut steering).await?;
+    run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
 
     assert!(matches!(
         &transcript[3],
         Message::User { content: UserContent::Text(text) } if text == "new direction"
     ));
     assert!(matches!(transcript[4], Message::Assistant(_)));
+    Ok(())
+}
+
+fn anthropic_tool_turn(stop_reason: &str) -> String {
+    anthropic_sse(&[
+        json!({"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"bound"}}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"result\"}"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":stop_reason},"usage":{"output_tokens":9}}),
+        json!({"type":"message_stop"}),
+    ])
+}
+
+fn anthropic_text(text: &str) -> String {
+    anthropic_sse(&[
+        json!({"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}),
+        json!({"type":"message_stop"}),
+    ])
+}
+
+#[tokio::test]
+async fn anthropic_thinking_is_replayed_on_the_next_turn() -> Result<()> {
+    let (server, model) = serve(
+        ProviderKind::Anthropic,
+        vec![anthropic_tool_turn("tool_use"), anthropic_text("done")],
+    )
+    .await;
+    let tools = ToolSet::new(vec![echo_tool()]);
+    let mut transcript = vec![user("start")];
+    let (_steer, mut steering) = mpsc::unbounded_channel();
+
+    let outcome = run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
+
+    assert_eq!(outcome, Outcome::Finished);
+    let requests = server.received_requests().await.unwrap_or_default();
+    let second: Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(
+        second["messages"],
+        json!([
+            {"role":"user","content":[{"type":"text","text":"start"}]},
+            {"role":"assistant","content":[
+                {"type":"thinking","thinking":"","signature":"bound"},
+                {"type":"tool_use","id":"toolu_1","name":"echo","input":{"text":"result"}}
+            ]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"result"}]}
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refusal_ends_the_run_without_executing_tools() -> Result<()> {
+    let (_server, model) = serve(
+        ProviderKind::Anthropic,
+        vec![anthropic_tool_turn("refusal")],
+    )
+    .await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = Tool::new("echo", "Echo text", (), {
+        let calls = Arc::clone(&calls);
+        move |_state, arguments: EchoArgs| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async move { Ok(text(arguments.text)) }
+        }
+    });
+    let tools = ToolSet::new(vec![tool]);
+    let mut transcript = vec![user("start")];
+    let (_steer, mut steering) = mpsc::unbounded_channel();
+
+    let outcome = run_agent(&model, &tools, 4, &mut transcript, &mut steering).await?;
+
+    assert_eq!(outcome, Outcome::Refused);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(&transcript[2], Message::Tool { content, .. } if content.contains("refused")));
     Ok(())
 }
