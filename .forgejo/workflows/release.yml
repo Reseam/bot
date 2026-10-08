@@ -62,16 +62,23 @@ jobs:
           cp config.toml root/etc/reseam-bot/
           tar --owner=0 --group=0 --numeric-owner -C root -czf dist/reseam-bot-linux-x64.tar.gz .
 
-      - name: Upload to the Forgejo release
-        uses: https://code.forgejo.org/actions/forgejo-release@v2.13.4
-        with:
-          direction: upload
-          url: https://git.reseam.app
-          repo: reseam/bot
-          tag: latest
-          sha: ${{ github.sha }}
-          release-dir: dist
-          override: true
+      # forgejo-release tags first and publishes a draft made from the tag, which Forgejo can lose the tag for.
+      # A release created with its target commit makes its own tag.
+      - name: Publish the release
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          api=https://git.reseam.app/api/v1/repos/reseam/bot
+          auth="Authorization: token $TOKEN"
+          for path in releases/tags/latest tags/latest; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "$auth" "$api/$path")
+            [ "$status" = 204 ] || [ "$status" = 404 ] || { echo "DELETE $path returned $status"; exit 1; }
+          done
+          id=$(curl -fsS -X POST -H "$auth" -H "Content-Type: application/json" \
+            -d '{"tag_name": "latest", "name": "latest", "target_commitish": "${{ github.sha }}"}' \
+            "$api/releases" | jq -er .id)
+          curl -fsS -X POST -H "$auth" -F "attachment=@dist/reseam-bot-linux-x64.tar.gz" \
+            "$api/releases/$id/assets?name=reseam-bot-linux-x64.tar.gz" > /dev/null
 
       - name: Deploy
         env:
