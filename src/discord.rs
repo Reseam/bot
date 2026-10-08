@@ -6,6 +6,8 @@ use poise::serenity_prelude as serenity;
 const PAGE_SIZE: u8 = 100;
 pub const UNKNOWN_MEMBER: isize = 10_007;
 pub const UNKNOWN_BAN: isize = 10_026;
+pub const ATTACHMENT_LIMIT: usize = 10;
+pub const UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 
 pub struct ChannelAccess {
     pub channel: serenity::GuildChannel,

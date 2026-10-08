@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use parking_lot::Mutex;
 use poise::serenity_prelude as serenity;
 use tokio::sync::{OwnedMutexGuard, mpsc};
@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::access::Tier;
 use crate::agent::{Agent, AgentEvent, CompactionSettings};
+use crate::discord::{ATTACHMENT_LIMIT, UPLOAD_LIMIT_BYTES};
 use crate::llm::{Message, Model, clear_replay};
 use crate::sandbox::SandboxKind;
 use crate::settings;
@@ -45,11 +46,34 @@ pub struct Run {
     denials: Mutex<HashSet<String>>,
     approval_notices: Mutex<Vec<String>>,
     message_ids: Mutex<HashSet<serenity::MessageId>>,
+    reply_files: Mutex<Vec<serenity::CreateAttachment>>,
 }
 
 impl Run {
     pub fn steer(&self, message: Message) -> bool {
         self.steering.send(message).is_ok()
+    }
+
+    pub fn reply_upload_room(&self) -> usize {
+        let used = self
+            .reply_files
+            .lock()
+            .iter()
+            .map(|file| file.data.len())
+            .sum::<usize>();
+        UPLOAD_LIMIT_BYTES.saturating_sub(used)
+    }
+
+    pub fn attach_to_reply(&self, files: Vec<serenity::CreateAttachment>) -> Result<()> {
+        let mut pending = self.reply_files.lock();
+        if pending.len() + files.len() > ATTACHMENT_LIMIT {
+            bail!(
+                "the reply already has {} files and Discord allows {ATTACHMENT_LIMIT}; use share for more",
+                pending.len()
+            );
+        }
+        pending.extend(files);
+        Ok(())
     }
 
     fn message_ids(&self) -> Vec<serenity::MessageId> {
@@ -168,6 +192,7 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
         denials: Mutex::default(),
         approval_notices: Mutex::default(),
         message_ids: Mutex::default(),
+        reply_files: Mutex::default(),
     });
     app.runs.start(&run);
     app.runs.register_message(reply_to, &run);
@@ -249,7 +274,8 @@ pub async fn run(app: Arc<App>, discord: serenity::Context, request: RunRequest)
         state = ?final_state,
         "run finished"
     );
-    match renderer.finish(&discord, final_state).await {
+    let reply_files = std::mem::take(&mut *run.reply_files.lock());
+    match renderer.finish(&discord, final_state, reply_files).await {
         Ok(ids) => ids
             .into_iter()
             .for_each(|id| app.runs.register_message(id, &run)),

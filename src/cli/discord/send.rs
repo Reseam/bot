@@ -7,11 +7,11 @@ use poise::serenity_prelude as serenity;
 use super::channel;
 use crate::chat::Run;
 use crate::cli::{CommandOutput, filename, snowflake};
-use crate::discord::{jump_link, resolve_channel, send_permission};
+use crate::discord::{
+    ATTACHMENT_LIMIT, UPLOAD_LIMIT_BYTES, jump_link, resolve_channel, send_permission,
+};
 use crate::text::{DISCORD_MESSAGE_LIMIT, truncate_chars};
 
-const MAX_ATTACHMENTS: usize = 10;
-const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const APPROVAL_PREVIEW_LIMIT: usize = 1_500;
 
 #[derive(Args)]
@@ -51,12 +51,31 @@ pub async fn send(
     if !access.permissions.contains(required) {
         bail!("invoker cannot send messages in #{}", access.channel.name);
     }
+    let to_reply = channel_id == run.channel_id && args.reply.is_none() && !args.files.is_empty();
     let mut attachments = Vec::with_capacity(args.files.len());
-    let mut remaining = MAX_UPLOAD_BYTES;
+    let mut remaining = if to_reply {
+        run.reply_upload_room()
+    } else {
+        UPLOAD_LIMIT_BYTES
+    };
     for (path, name) in args.files.iter().zip(names) {
         let bytes = files.read(path, remaining).await?;
         remaining -= bytes.len();
         attachments.push(serenity::CreateAttachment::bytes(bytes, name));
+    }
+    if to_reply {
+        let names = attachments
+            .iter()
+            .map(|attachment| attachment.filename.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        run.attach_to_reply(attachments)?;
+        let mut output =
+            format!("Attached {names} to your reply. Discord shows it when you finish.");
+        if !content.is_empty() {
+            output.push_str(" The text was not sent; say it in your answer.");
+        }
+        return Ok(CommandOutput::text(output));
     }
     let mut preview = truncate_chars(content, APPROVAL_PREVIEW_LIMIT);
     for attachment in &attachments {
@@ -84,6 +103,9 @@ pub async fn send(
         .send_message(&run.discord, builder)
         .await
         .context("failed to send Discord message")?;
+    if channel_id == run.channel_id {
+        run.app.runs.register_message(message.id, run);
+    }
     Ok(CommandOutput::text(format!(
         "Sent {}",
         jump_link(run.guild_id, channel_id, message.id)
@@ -115,8 +137,8 @@ fn validate_send(content: &str, files: &[String]) -> Result<()> {
     if content.chars().count() > DISCORD_MESSAGE_LIMIT {
         bail!("message must be at most {DISCORD_MESSAGE_LIMIT} characters");
     }
-    if files.len() > MAX_ATTACHMENTS {
-        bail!("a message can have at most {MAX_ATTACHMENTS} files");
+    if files.len() > ATTACHMENT_LIMIT {
+        bail!("a message can have at most {ATTACHMENT_LIMIT} files");
     }
     Ok(())
 }

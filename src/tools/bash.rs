@@ -19,7 +19,7 @@ Built in: common coreutils, grep, rg, sed, awk, jq, yq, sqlite3, xan (CSV), diff
 
 Bridge commands (run `COMMAND --help` for details):
 - discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord poll` posts a real Discord poll; `discord remind set|list|cancel` manages the invoker's reminders; `discord audit` reads the server audit log (filter with --user and --action); `discord mod` for moderation.
-- discord send --file PATH [--filename NAME] [TEXT]: upload a sandbox file as an attachment to this Discord channel. Repeat --file for multiple files. Creating a file for the user includes sending it with this command.
+- discord send --file PATH [--filename NAME]: attach a sandbox file to your reply, which Discord shows when you finish (up to 10 files and 10 MB per reply). Repeat --file for multiple files. Creating a file for the user includes sending it with this command; describe it in your answer. With --channel, it posts the files in that channel instead.
 - archive --output bundle.zip [--recursive] PATH...: create a ZIP in the sandbox. Then use discord send --file bundle.zip to deliver it. archive list FILE inspects a ZIP; archive extract FILE --output NEW_DIRECTORY extracts one.
 - repo clone URL [--ref REF] [--history]: clone or update an HTTPS repository.
 - mcp list, mcp SERVER TOOL --help, mcp SERVER TOOL key=value: call MCP services such as web search.
@@ -36,7 +36,7 @@ Built in: common coreutils, grep, rg, sed, awk, jq, yq, sqlite3, xan (CSV), diff
 
 Bridge commands (run `COMMAND --help` for details):
 - discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord poll` posts a real Discord poll; `discord remind set|list|cancel` manages the invoker's reminders; `discord mod` for moderation.
-- discord send --file PATH [--filename NAME] [TEXT]: upload a sandbox file as an attachment to this Discord channel. Repeat --file for multiple files. Creating a file for the user includes sending it with this command.
+- discord send --file PATH [--filename NAME]: attach a sandbox file to your reply, which Discord shows when you finish (up to 10 files and 10 MB per reply). Repeat --file for multiple files. Creating a file for the user includes sending it with this command; describe it in your answer. With --channel, it posts the files in that channel instead.
 - archive --output bundle.zip [--recursive] PATH...: create a ZIP in the sandbox. Then use discord send --file bundle.zip to deliver it. archive list FILE inspects a ZIP; archive extract FILE --output NEW_DIRECTORY extracts one.
 - view FILE: attach an image file to this result so you can see it.
 
@@ -53,7 +53,7 @@ Reseam: the latest `reseam` CLI and patches bundle, updated at the start of each
 Bridge commands (run `COMMAND --help` for details):
 - discord: read messages (filter with --author and --contains), attachments, channels, members, and the server; send messages, react, create threads, pin; `discord poll` posts a real Discord poll; `discord remind set|list|cancel` manages the invoker's reminders; `discord audit` reads the server audit log (filter with --user and --action); `discord mod` for moderation.
 - discord attachment MESSAGE_ID --url [--index N]: print a temporary download URL for an uploaded file such as an APK, then fetch it with curl. APKs come from Discord uploads or links the invoker gives; APK mirror sites block this container.
-- discord send --file PATH [--filename NAME] [TEXT]: upload a container file as an attachment to this Discord channel. Repeat --file for multiple files. Creating a file for the user includes sending it with this command. Discord takes files up to 10 MB.
+- discord send --file PATH [--filename NAME]: attach a container file to your reply, which Discord shows when you finish (up to 10 files and 10 MB per reply). Repeat --file for multiple files. Creating a file for the user includes sending it with this command; describe it in your answer. With --channel, it posts the files in that channel instead.
 - share FILE: upload a file of any size, such as a patched APK, and print a download link that works for 24 hours. Use it for files over 10 MB and give the invoker the link.
 - mcp list, mcp SERVER TOOL --help, mcp SERVER TOOL key=value: call MCP services such as web search.
 - fetch [--method M] [--header 'K: V']... [--body FILE] URL: an HTTP request made by the bot. Use it for forge REST APIs; requests to configured forges are authenticated automatically. `--body -` reads stdin. Prints the response body and exits 22 on an HTTP error status.

@@ -133,6 +133,7 @@ impl Renderer {
         &mut self,
         discord: &serenity::Context,
         state: FinalState,
+        files: Vec<serenity::CreateAttachment>,
     ) -> Result<Vec<serenity::MessageId>> {
         let footer = match state {
             FinalState::Outcome(Outcome::Finished) if self.finished == 0 => String::new(),
@@ -145,7 +146,20 @@ impl Renderer {
         if self.answer.trim().is_empty() && footer.is_empty() {
             self.answer = "Done.".to_owned();
         }
-        self.update(discord, &footer, false).await
+        let added = self.update(discord, &footer, false).await?;
+        if !files.is_empty() {
+            let edit = files.into_iter().fold(
+                serenity::EditMessage::new(),
+                serenity::EditMessage::new_attachment,
+            );
+            self.messages
+                .last_mut()
+                .expect("a run reply always has a message")
+                .edit(discord, edit)
+                .await
+                .context("failed to attach files to the run reply")?;
+        }
+        Ok(added)
     }
 
     async fn update(

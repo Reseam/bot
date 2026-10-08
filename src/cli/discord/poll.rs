@@ -74,6 +74,9 @@ pub async fn poll(run: &Arc<Run>, args: Poll) -> Result<CommandOutput> {
         .send_message(&run.discord, serenity::CreateMessage::new().poll(poll))
         .await
         .context("failed to send Discord poll")?;
+    if channel_id == run.channel_id {
+        run.app.runs.register_message(message.id, run);
+    }
     Ok(CommandOutput::text(format!(
         "Posted poll {}",
         jump_link(run.guild_id, channel_id, message.id)
