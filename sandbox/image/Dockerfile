@@ -48,7 +48,7 @@ RUN curl -fsSL https://github.com/coursier/coursier/releases/download/v2.1.25/cs
     && chmod +x /usr/local/bin/smali /usr/local/bin/baksmali
 RUN git clone --depth 1 https://git.reseam.app/reseam/patches /tmp/patches \
     && version=$(curl -fsS https://git.reseam.app/api/v1/repos/reseam/reseam/releases/latest | jq -er .tag_name) \
-    && curl -fsSL -o /tmp/reseam "https://git.reseam.app/reseam/reseam/releases/download/$version/reseam-linux-x64" \
+    && curl -fsSL -o /tmp/reseam "https://cdn.reseam.app/engine/$version/reseam-linux-x64" \
     && chmod +x /tmp/reseam \
     && /tmp/reseam bundle keygen --out /tmp/bundle.key \
     && cd /tmp/patches \
