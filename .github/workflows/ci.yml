@@ -9,7 +9,7 @@ jobs:
   ci:
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     container:
-      image: ghcr.io/reseam/ci:2026.10.19
+      image: ghcr.io/reseam/ci:2026.11.19
     env:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_WEBHOOK }}
