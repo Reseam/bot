@@ -1,4 +1,4 @@
-reseam_version := "0.28.0"
+reseam_version := "0.42.2"
 sandbox := "root/usr/local/lib/reseam-bot/sandbox"
 
 check:
